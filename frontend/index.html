@@ -6,6 +6,28 @@
     <link rel="stylesheet" href="style.css">
     <title>Meu Site</title>
 </head>
+<script>
+    document.getElementById("isoForm").addEventListener("submit", function(e) {
+        e.preventDefault();
+
+        const formData = new FormData(this);
+
+        fetch("http://127.0.0.1:5000/build/linux", {
+            method: "POST",
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            document.getElementById("status").innerText = 
+                "Status: " + data.status;
+        })
+        .catch(err => {
+            document.getElementById("status").innerText = 
+                "Erro ao iniciar o processo";
+            console.error(err);
+        });
+    });
+</script>
 <body>
     <main>
         <h1>Teste de desmontagem de ISO</h1>
@@ -32,6 +54,22 @@
     <div class="app-box">
         <h2>Configuração da ISO</h2>
         <p>Aqui vai ficar a interface do software</p>
+        <form id="isoForm" class="form">
+    <div class="field">
+        <label>ISO</label>
+        <input type="file" name="iso" accept=".iso" required>
+    </div>
+
+    <div class="field">
+        <label>Pasta de saída</label>
+        <input type="file" name="out_dir" webkitdirectory required>
+    </div>
+
+    <button type="submit">Iniciar extração</button>
+</form>
+
+<p id="status"></p>
+
     </div>
 </main>
     </main>

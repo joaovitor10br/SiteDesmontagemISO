@@ -1,22 +1,25 @@
-from flask import Flask, request, jsonify
-from iso_linux import build_iso
-
-app = Flask(__name__)
-
 @app.route("/build/linux", methods=["POST"])
 def build_linux():
-    iso = request.form.get("iso")
-    out_dir = request.form.get("out_dir")
+    iso = request.files.get("iso")
+    files = request.files.getlist("out_dir")
 
-    if not iso or not out_dir:
-        return jsonify({"error": "Parâmetros faltando"}), 400
+    if not iso or not files:
+        return jsonify({"error": "Dados inválidos"}), 400
 
-    result = build_iso(iso, out_dir)
+    # salva ISO
+    iso_path = os.path.join("/tmp/uploads", iso.filename)
+    iso.save(iso_path)
+
+    # descobre nome da pasta base
+    first_file = files[0]
+    base_folder = first_file.filename.split("/")[0]
+
+    out_dir = os.path.join("/home/joao/Iso_extraida", base_folder)
+    os.makedirs(out_dir, exist_ok=True)
+
+    build_iso(iso_path, out_dir)
 
     return jsonify({
         "status": "Build iniciado",
-        "details": result
+        "output": out_dir
     })
-
-if __name__ == "__main__":
-    app.run(debug=True)
