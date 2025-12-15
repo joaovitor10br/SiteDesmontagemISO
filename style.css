@@ -1,0 +1,113 @@
+*{
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+h1{
+    font-size: 24px;
+    font-family: Arial, Helvetica, sans-serif;
+    font-weight: bold;
+    text-align: center;
+    color: white;
+}
+
+body{
+    background-color: #2A7B9B;
+}
+
+main{
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.menu{
+    list-style: none;
+    border: 1px solid #c0c0c0;
+    margin: 0 auto;
+    width: fit-content;
+    display: flex;
+    justify-content: center;
+    margin-top: 20px;
+    border-radius: 8px;
+}
+
+.menu li{
+    position: relative;
+    border-right: 1px solid #c0c0c0;
+}
+
+.menu li a{color: #fff; text-decoration: none; padding: 10px 15px; display: block; transition: 0.3s;}
+
+.menu li a:hover{
+    background: #333;
+    color: #fff;
+}
+
+.menu li ul{
+    position: absolute;
+    top: 100%;
+    left: 0;
+    background-color: #333;
+    display: none;
+    min-width: 150px;
+    z-index: 999;
+    border-radius: 6px;
+}
+
+.menu li:hover ul, .menu li.over ul{display: block;}
+
+.menu li ul li{
+    border: 1px solid #c0c0c0;
+    width: 100%;
+}
+
+.menu li ul li a{
+    padding: 8px 12px;
+}
+
+.disabled{
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.menu li ul li ul{
+    top: 0;
+    left: 100%;
+    display: none;
+}
+
+.menu li ul li:hover ul{
+    display: block;
+}
+
+
+.app-container{
+    min-height: calc(100vh - 120px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+}
+
+.app-box{
+    width: 90%;
+    max-width: 420px;
+    height: auto;
+    min-height: 400px;
+    background-color: white;
+    border-radius: 12px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.25);
+    padding: 20px;
+    font-family: Arial, Helvetica, sans-serif;
+}
+
+.app-box h2{
+    text-align: center;
+    margin-bottom: 10px;
+}
+
+.app-box p{
+    text-align: center;
+    color: #555;
+}
