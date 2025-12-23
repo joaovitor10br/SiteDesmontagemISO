@@ -39,16 +39,35 @@ def mount_loop_linux_and_copy(iso_path, out_dir):
         os.rmdir(mount_dir)
 
 # 👉 FUNÇÃO PRINCIPAL REUTILIZÁVEL
-def build_iso(iso_path, out_dir):
+def build_iso(iso_path, out_dir, deb_path=None):
     iso_path = os.path.abspath(iso_path)
     os.makedirs(out_dir, exist_ok=True)
 
+    # Extrai a ISO usando mount ou 7z
     if platform.system() == "Linux":
         try:
             mount_loop_linux_and_copy(iso_path, out_dir)
-            return {"method": "loop", "status": "ok"}
+            print("ISO montada com sucesso.")
         except Exception as e:
-            print("Loop falhou:", e)
+            print("Erro ao montar a ISO:", e)
+            return {"method": "loop", "status": "fail"}
 
-    extract_with_7z(iso_path, out_dir)
-    return {"method": "7z", "status": "ok"}
+    else:
+        extract_with_7z(iso_path, out_dir)
+        print("ISO extraída com 7z.")
+
+    # Se o .deb foi fornecido, injetar o pacote dentro da ISO
+    if deb_path:
+        inject_package(out_dir, deb_path)
+        print(f"Pacote {deb_path} injetado na ISO.")
+
+    return {"method": "iso", "status": "ok"}
+
+
+def inject_package(iso_root, deb_path):
+    # Aqui você cria o diretório extra_packages dentro da ISO desmontada
+    target_dir = os.path.join(iso_root, "extra_packages")
+    os.makedirs(target_dir, exist_ok=True)
+
+    # Copia o pacote .deb para dentro da ISO
+    shutil.copy2(deb_path, target_dir)
