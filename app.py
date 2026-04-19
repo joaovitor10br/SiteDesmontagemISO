@@ -42,6 +42,9 @@ BASE_DIR = "/home/joao/iso_builder"
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 EXTRACT_DIR = os.path.join(BASE_DIR, "extracted")
 
+DEB_DIR = os.path.join(BASE_DIR, "debs")
+os.makedirs(DEB_DIR, exist_ok=True)
+
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(EXTRACT_DIR, exist_ok=True)
 
@@ -71,6 +74,18 @@ def build_linux():
     iso = request.files.get("iso")
     output_dir = request.form.get("output_dir")
 
+    deb_files = request.files.getlist("debs")
+    saved_debs = []
+
+    # salva pacotes .deb enviados
+    for deb in deb_files:
+        if deb.filename == "":
+            continue
+
+        deb_path = os.path.join(DEB_DIR, deb.filename)
+        deb.save(deb_path)
+        saved_debs.append(deb_path)
+
     if not iso:
         return jsonify({"error": "ISO não enviada"}), 400
 
@@ -98,9 +113,17 @@ def build_linux():
                 tasks[task_id]["progress"] = value
                 tasks[task_id]["status"] = status
 
-            build_iso(iso_path, output_dir, progress_callback)
+            # 🔥 CHAMADA REAL da função build_iso importada
+            build_iso(
+                iso_path,
+                output_dir,
+                progress_callback,
+                deb_paths=saved_debs
+            )
 
             tasks[task_id]["output"] = output_dir
+            tasks[task_id]["progress"] = 100
+            tasks[task_id]["status"] = "ISO criada com sucesso!"
 
         except Exception as e:
             tasks[task_id]["status"] = f"Erro: {str(e)}"

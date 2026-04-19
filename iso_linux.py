@@ -6,6 +6,21 @@ import sys
 import tempfile
 from pathlib import Path
 
+def find_isohdpfx():
+    possible_paths = [
+        "/usr/lib/ISOLINUX/isohdpfx.bin",
+        "/usr/lib/syslinux/isohdpfx.bin",
+        "/usr/lib/syslinux/bios/isohdpfx.bin",
+    ]
+
+    for path in possible_paths:
+        if os.path.exists(path):
+            return path
+
+    raise RuntimeError("isohdpfx.bin não encontrado. Instale syslinux.")
+
+
+
 def copy_with_progress(src, dst, progress_callback):
     # conta todos os arquivos primeiro
     total_files = 0
@@ -34,9 +49,14 @@ def copy_with_progress(src, dst, progress_callback):
                 progress_callback(percent, f"Copiando arquivos ({copied_files}/{total_files})")
 
 
-def run(cmd, check=True):
+def run(cmd, check=True, allow_codes=(0,)):
     print("+", " ".join(cmd))
-    return subprocess.run(cmd, check=check)
+    result = subprocess.run(cmd)
+
+    if check and result.returncode not in allow_codes:
+        raise subprocess.CalledProcessError(result.returncode, cmd)
+
+    return result
 
 def has_executable(name):
     from shutil import which
@@ -63,8 +83,15 @@ def mount_loop_linux_and_copy(iso_path, out_dir, progress_callback=None):
         except subprocess.CalledProcessError:
             run(["sudo", "mount", "-o", "loop,ro", iso_path, mount_dir])
 
-        progress_callback( 55, "Copiando arquivos da ISO...")
-        copy_with_progress(mount_dir, out_dir, progress_callback)
+        progress_callback(55, "Copiando arquivos da ISO com rsync...")
+
+        run([
+            "sudo", "rsync",
+            "-aH",
+            "--delete",
+            f"{mount_dir}/",
+            f"{out_dir}/"
+        ], allow_codes=(0, 1))
 
     finally:
         progress_callback( 75, "Desmontando ISO...")
@@ -76,40 +103,111 @@ def mount_loop_linux_and_copy(iso_path, out_dir, progress_callback=None):
         os.rmdir(mount_dir)
 
 # 👉 FUNÇÃO PRINCIPAL REUTILIZÁVEL
-def build_iso(iso_path, out_dir, progress_callback=None, deb_path=None):
+def build_iso(iso_path, out_dir, progress_callback=None, deb_paths=None):
     iso_path = os.path.abspath(iso_path)
     os.makedirs(out_dir, exist_ok=True)
 
     progress_callback( 5, "Preparando extração...")
 
     # Extrai a ISO usando mount ou 7z
-    if platform.system() == "Linux":
-        try:
-            mount_loop_linux_and_copy(iso_path, out_dir, progress_callback)
-            print("ISO montada com sucesso.")
-        except Exception as e:
-            print("Erro ao montar a ISO:", e)
-            progress_callback(0, "Erro ao montar ISO")
-            return {"method": "loop", "status": "fail"}
-    else:
-        progress_callback( 30, "Extraindo com 7z...")
-        extract_with_7z(iso_path, out_dir)
-        print("ISO extraída com 7z.")
+    # sempre extrair com 7z (metodo confiável)
+    extract_with_7z(iso_path, out_dir)
+    print("ISO extraída com 7z.")
 
     # Injeção de pacote
-    if deb_path:
-        progress_callback( 85, "Injetando pacotes...")
-        inject_package(out_dir, deb_path)
+    # Injeção de pacotes .deb
+    # Injeção real no sistema live
+    if deb_paths:
+        customize_live_system(out_dir, deb_paths, progress_callback)
 
-    progress_callback( 100, "Finalizado!")
+    create_bootable_iso(out_dir, out_dir, progress_callback)
+
+    progress_callback(100, "Finalizado!")
 
     return {"method": "iso", "status": "ok"}
 
+def customize_live_system(iso_root, deb_paths, progress_callback):
+    import subprocess
 
-def inject_package(iso_root, deb_path):
-    # Aqui você cria o diretório extra_packages dentro da ISO desmontada
-    target_dir = os.path.join(iso_root, "extra_packages")
-    os.makedirs(target_dir, exist_ok=True)
+    squashfs_path = os.path.join(iso_root, "casper/filesystem.squashfs")
 
-    # Copia o pacote .deb para dentro da ISO
-    shutil.copy2(deb_path, target_dir)
+    if not os.path.exists(squashfs_path):
+        progress_callback(0, "ISO não é Ubuntu/Debian live 😢")
+        return
+
+    work_dir = os.path.join(iso_root, "squashfs-root")
+
+    progress_callback(88, "Extraindo sistema interno (squashfs)...")
+
+    # garante DNS dentro do chroot (internet)
+    shutil.copy("/etc/resolv.conf", work_dir + "/etc/resolv.conf")
+
+    run(["unsquashfs", "-d", work_dir, squashfs_path])
+
+    # monta pseudo-filesystems para chroot funcionar
+    progress_callback(90, "Preparando ambiente chroot...")
+    run(["sudo", "umount", "-lf", work_dir + "/dev"])
+    run(["sudo", "umount", "-lf", work_dir + "/proc"])
+    run(["sudo", "umount", "-lf", work_dir + "/sys"])
+
+    try:
+        # copia os .deb pra dentro do sistema live
+        deb_target = os.path.join(work_dir, "tmp/debs")
+        os.makedirs(deb_target, exist_ok=True)
+
+        for deb in deb_paths:
+            shutil.copy2(deb, deb_target)
+
+        progress_callback(92, "Instalando pacotes dentro da ISO...")
+
+        # instala os pacotes via chroot 😎
+        run([
+            "sudo", "chroot", work_dir,
+            "bash", "-c",
+            "dpkg -i /tmp/debs/*.deb || apt-get -f install -y"
+        ])
+
+    finally:
+        progress_callback(95, "Desmontando ambiente chroot...")
+        run(["sudo", "umount", work_dir + "/dev"])
+        run(["sudo", "umount", work_dir + "/proc"])
+        run(["sudo", "umount", work_dir + "/sys"])
+
+    # recria o squashfs
+    progress_callback(97, "Recompactando sistema...")
+    run([
+        "sudo", "mksquashfs",
+        work_dir,
+        squashfs_path,
+        "-noappend"
+    ])
+    shutil.rmtree(work_dir)
+
+
+def create_bootable_iso(iso_root, output_dir, progress_callback):
+    progress_callback(98, "Gerando ISO final...")
+
+    final_iso = os.path.join(output_dir, "custom_linux.iso")
+    isohdpfx = find_isohdpfx()   # 🔥 NOVO
+
+    run([
+        "sudo", "xorriso",
+        "-as", "mkisofs",
+        "-r",
+        "-V", "CustomLinux",
+        "-J",
+        "-l",
+        "-iso-level", "3",
+        "-isohybrid-mbr", "/usr/lib/ISOLINUX/isohdpfx.bin",
+        "-c", "isolinux/boot.cat",
+        "-b", "isolinux/isolinux.bin",
+        "-no-emul-boot",
+        "-boot-load-size", "4",
+        "-boot-info-table",
+        "-eltorito-alt-boot",
+        "-e", "EFI/boot/bootx64.efi",
+        "-no-emul-boot",
+        "-isohybrid-gpt-basdat",
+        "-o", final_iso,
+        iso_root
+    ])
