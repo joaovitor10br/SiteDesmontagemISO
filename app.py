@@ -34,8 +34,8 @@ def validar_diretorio_usuario(path):
 
 # IMPORTANTE: Avisamos ao Flask que os arquivos estão na pasta ao lado
 app = Flask(__name__, 
-            template_folder='../frontend', 
-            static_folder='../frontend',
+            template_folder='frontend', 
+            static_folder='frontend',
             static_url_path='') 
 
 BASE_DIR = "/home/joao/iso_builder"
