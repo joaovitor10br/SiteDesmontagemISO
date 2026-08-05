@@ -1,5 +1,10 @@
+<<<<<<< HEAD
 venv/
 __pycache__/
 *.iso
 /tmp/
 .env
+.idea/
+__pycache__/
+venv/
+dev
