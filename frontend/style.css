@@ -1,163 +1,192 @@
 *{
-    margin: 0;
-    padding: 0;
-    box-sizing: border-box;
-}
-
-h1{
-    font-size: 24px;
-    font-family: Arial, Helvetica, sans-serif;
-    font-weight: bold;
-    text-align: center;
-    color: white;
+    margin:0;
+    padding:0;
+    box-sizing:border-box;
+    font-family: "Segoe UI", Tahoma, sans-serif;
 }
 
 body{
-    background-color: #2A7B9B;
+    background: linear-gradient(135deg,#0f172a,#020617);
+    color:#e5e7eb;
+    min-height:100vh;
 }
 
-main{
-    max-width: 1200px;
-    margin: 0 auto;
+/* HEADER */
+header{
+    background:#020617;
+    padding:20px 40px;
+    border-bottom:1px solid #1e293b;
+    display:flex;
+    justify-content:space-between;
+    align-items:center;
+}
+
+.logo{
+    font-size:24px;
+    font-weight:bold;
+    color:#38bdf8;
 }
 
 .menu{
-    list-style: none;
-    border: 1px solid #c0c0c0;
-    margin: 0 auto;
-    width: fit-content;
-    display: flex;
-    justify-content: center;
-    margin-top: 20px;
-    border-radius: 8px;
+    list-style:none;
+    display:flex;
+    gap:25px;
 }
 
-.menu li{
-    position: relative;
-    border-right: 1px solid #c0c0c0;
+.menu a{
+    text-decoration:none;
+    color:#e5e7eb;
+    font-weight:500;
+    transition:0.3s;
 }
 
-.menu li a{color: #fff; text-decoration: none; padding: 10px 15px; display: block; transition: 0.3s;}
-
-.menu li a:hover{
-    background: #333;
-    color: #fff;
+.menu a:hover{
+    color:#38bdf8;
 }
 
-.menu li ul{
-    position: absolute;
-    top: 100%;
-    left: 0;
-    background-color: #333;
-    display: none;
-    min-width: 150px;
-    z-index: 999;
-    border-radius: 6px;
-}
-
-.menu li:hover ul, .menu li.over ul{display: block;}
-
-.menu li ul li{
-    border: 1px solid #c0c0c0;
-    width: 100%;
-}
-
-.menu li ul li a{
-    padding: 8px 12px;
-}
-
-.disabled{
-    opacity: 0.5;
-    pointer-events: none;
-}
-
-.menu li ul li ul{
-    top: 0;
-    left: 100%;
-    display: none;
-}
-
-.menu li ul li:hover ul{
-    display: block;
-}
-
-
+/* CONTAINER CENTRAL */
 .app-container{
-    min-height: calc(100vh - 120px);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    padding:60px 20px;
 }
 
-/* quadro branco */
-.app-box {
-    background: #fff;
-    width: 420px;
-    padding: 30px;
-    margin: 50px auto;
-    border-radius: 16px;
-    box-shadow: 0 20px 40px rgba(0,0,0,0.25);
-    text-align: center;
+/* CARD PRINCIPAL */
+.app-box{
+    width:600px;
+    background:#020617;
+    padding:35px;
+    border-radius:16px;
+    box-shadow:0 0 30px rgba(0,0,0,0.4);
 }
 
-/* formulário */
-.form {
-    display: flex;
-    flex-direction: column;
-    gap: 20px;
+.app-box h2{
+    margin-bottom:10px;
+    color:#38bdf8;
 }
 
-/* cada campo */
-.field {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+.app-box p{
+    margin-bottom:25px;
+    opacity:0.8;
 }
 
-.field label {
-    font-weight: bold;
-    color: #333;
+/* FORM */
+.field{
+    margin-bottom:20px;
+    display:flex;
+    flex-direction:column;
 }
 
-/* inputs */
-input[type="file"] {
-    padding: 12px;
-    border-radius: 10px;
-    border: 2px dashed #bbb;
-    background: #f9f9f9;
-    cursor: pointer;
-    transition: 0.3s;
+label{
+    margin-bottom:6px;
+    font-size:14px;
 }
 
-input[type="file"]:hover {
-    border-color: #2A7B9B;
-    background: #eef6fa;
+input{
+    padding:10px;
+    border-radius:8px;
+    border:1px solid #1e293b;
+    background:#0f172a;
+    color:white;
 }
 
-/* botão */
-button {
-    margin-top: 10px;
-    padding: 14px;
-    border-radius: 12px;
-    border: none;
-    font-size: 16px;
-    font-weight: bold;
-    cursor: pointer;
-    background: linear-gradient(135deg, #2A7B9B, #1e3c72);
-    color: white;
-    transition: transform 0.2s, box-shadow 0.2s;
+button{
+    width:100%;
+    padding:12px;
+    background:#38bdf8;
+    border:none;
+    border-radius:10px;
+    font-weight:bold;
+    cursor:pointer;
+    transition:0.3s;
 }
 
-button:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 20px rgba(0,0,0,0.25);
+button:hover{
+    background:#0ea5e9;
 }
 
-/* status */
-#status {
-    margin-top: 15px;
-    text-align: center;
-    font-weight: bold;
-    color: #2A7B9B;
+/* PROGRESS BAR */
+progress{
+    height:18px;
+    border-radius:10px;
+    overflow:hidden;
+}
+
+footer{
+    text-align:center;
+    padding:20px;
+    opacity:0.6;
+    font-size:14px;
+}
+
+
+/* =========================
+   ANIMAÇÃO DA PROGRESS BAR
+   ========================= */
+
+progress{
+    height:18px;
+    border-radius:999px;
+    overflow:hidden;
+    appearance:none;
+}
+
+/* fundo da barra */
+progress::-webkit-progress-bar{
+    background:#0f172a;
+    border-radius:999px;
+}
+
+/* valor preenchido */
+progress::-webkit-progress-value{
+    border-radius:999px;
+    background: linear-gradient(
+        90deg,
+        #38bdf8,
+        #0ea5e9,
+        #38bdf8
+    );
+    background-size: 200% 100%;
+    animation: moveGradient 2s linear infinite;
+    transition: width 0.4s ease;
+}
+
+/* Firefox */
+progress::-moz-progress-bar{
+    border-radius:999px;
+    background: linear-gradient(
+        90deg,
+        #38bdf8,
+        #0ea5e9,
+        #38bdf8
+    );
+    background-size: 200% 100%;
+    animation: moveGradient 2s linear infinite;
+}
+
+/* =========================
+   ANIMAÇÃO DO TEXTO DE STATUS
+   ========================= */
+
+#statusText{
+    opacity: 0;
+    transform: translateY(6px);
+    animation: statusFade 0.6s ease forwards;
+}
+
+/* toda vez que o texto mudar o navegador reaplica a animação */
+#statusText:not(:empty){
+    animation: statusFade 0.6s ease forwards;
+}
+
+@keyframes statusFade{
+    from{
+        opacity:0;
+        transform: translateY(6px);
+    }
+    to{
+        opacity:1;
+        transform: translateY(0);
+    }
 }
