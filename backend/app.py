@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify, render_template # Adicionei render_template
+from flask import Flask, request, jsonify
 import os
 import threading
 import uuid
@@ -32,11 +32,7 @@ def validar_diretorio_usuario(path):
 
     return path
 
-# IMPORTANTE: Avisamos ao Flask que os arquivos estão na pasta ao lado
-app = Flask(__name__, 
-            template_folder='../frontend', 
-            static_folder='../frontend',
-            static_url_path='') 
+app = Flask(__name__)
 
 BASE_DIR = "/home/joao/iso_builder"
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
@@ -48,17 +44,6 @@ os.makedirs(DEB_DIR, exist_ok=True)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(EXTRACT_DIR, exist_ok=True)
 
-# --- NOVA ROTA PARA O FRONT-END ---
-@app.route("/")
-def index():
-    # Isso vai procurar o index.html dentro da pasta /frontend
-    return render_template("index.html")
-
-# --- ROTA PARA O SOBRE ---
-@app.route("/sobre.html")
-def sobre():
-    return render_template("sobre.html")
-# ----------------------------------
 
 @app.route("/progress/<task_id>")
 def progress(task_id):
