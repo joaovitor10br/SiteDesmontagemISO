@@ -184,30 +184,258 @@ def customize_live_system(iso_root, deb_paths, progress_callback):
     shutil.rmtree(work_dir)
 
 
+def detect_boot_config(iso_root):
+    """
+    Detecta o sistema de boot presente na ISO extraída.
+
+    Retorna um dicionário com os caminhos necessários
+    para reconstruir a ISO usando xorriso.
+    """
+
+    # ==========================================================
+    # Arch / ArchISO
+    # ==========================================================
+
+    arch_boot_image = os.path.join(
+        iso_root,
+        "boot/syslinux/isolinux.bin"
+    )
+
+    if os.path.exists(arch_boot_image):
+        boot_catalog = os.path.join(
+            iso_root,
+            "boot/syslinux/boot.cat"
+        )
+
+        efi_image = os.path.join(
+            iso_root,
+            "EFI/BOOT/BOOTx64.EFI"
+        )
+
+        if not os.path.exists(boot_catalog):
+            raise RuntimeError(
+                f"Catálogo de boot não encontrado: {boot_catalog}"
+            )
+
+        if not os.path.exists(efi_image):
+            raise RuntimeError(
+                f"Imagem EFI não encontrada: {efi_image}"
+            )
+
+        print("DEBUG: Estrutura de boot Arch/ArchISO detectada.")
+
+        return {
+            "type": "arch",
+            "boot_catalog": "boot/syslinux/boot.cat",
+            "boot_image": "boot/syslinux/isolinux.bin",
+            "efi_image": "EFI/BOOT/BOOTx64.EFI",
+        }
+
+    # ==========================================================
+    # Debian / Ubuntu / GRUB
+    # ==========================================================
+
+    grub_boot_image = os.path.join(
+        iso_root,
+        "boot/grub/i386-pc/eltorito.img"
+    )
+
+    if os.path.exists(grub_boot_image):
+        efi_image = os.path.join(
+            iso_root,
+            "EFI/boot/bootx64.efi"
+        )
+
+        # Algumas ISOs utilizam letras maiúsculas.
+        if not os.path.exists(efi_image):
+            efi_image = os.path.join(
+                iso_root,
+                "EFI/BOOT/BOOTx64.EFI"
+            )
+
+        if not os.path.exists(efi_image):
+            raise RuntimeError(
+                "Imagem EFI do GRUB não encontrada."
+            )
+
+        print("DEBUG: Estrutura de boot GRUB/Debian detectada.")
+
+        return {
+            "type": "grub",
+            "boot_catalog": "boot.catalog",
+            "boot_image": "boot/grub/i386-pc/eltorito.img",
+            "efi_image": os.path.relpath(
+                efi_image,
+                iso_root
+            ),
+        }
+
+    # ==========================================================
+    # Nenhuma estrutura conhecida
+    # ==========================================================
+
+    raise RuntimeError(
+        "Estrutura de boot não reconhecida. "
+        "Não foi encontrado um bootloader compatível."
+    )
+
+
 def create_bootable_iso(iso_root, output_dir, progress_callback):
+    """
+    Cria a ISO final a partir do diretório extraído.
+    """
+
     progress_callback(98, "Gerando ISO final...")
 
-    final_iso = os.path.join(output_dir, "custom_linux.iso")
-    isohdpfx = find_isohdpfx()   # 🔥 NOVO
+    # ----------------------------------------------------------
+    # Caminho da ISO final
+    # ----------------------------------------------------------
 
-    run([
-        "sudo", "xorriso",
+    output_dir = os.path.abspath(output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    final_iso = os.path.join(
+        output_dir,
+        "custom_linux.iso"
+    )
+
+    # ----------------------------------------------------------
+    # Localiza o isohdpfx.bin
+    # ----------------------------------------------------------
+
+    isohdpfx = find_isohdpfx()
+
+    print(f"DEBUG isohdpfx: {isohdpfx}")
+    print(f"DEBUG existe: {os.path.exists(isohdpfx)}")
+
+    if not os.path.exists(isohdpfx):
+        raise RuntimeError(
+            f"isohdpfx.bin não encontrado: {isohdpfx}"
+        )
+
+    # ----------------------------------------------------------
+    # Detecta o bootloader
+    # ----------------------------------------------------------
+
+    boot_config = detect_boot_config(iso_root)
+
+    print(
+        f"DEBUG tipo de boot: {boot_config['type']}"
+    )
+
+    print(
+        f"DEBUG boot catalog: "
+        f"{boot_config['boot_catalog']}"
+    )
+
+    print(
+        f"DEBUG boot image: "
+        f"{boot_config['boot_image']}"
+    )
+
+    print(
+        f"DEBUG EFI image: "
+        f"{boot_config['efi_image']}"
+    )
+
+    # ----------------------------------------------------------
+    # Remove ISO anterior, caso exista
+    # ----------------------------------------------------------
+
+    if os.path.exists(final_iso):
+        print(
+            f"DEBUG removendo ISO anterior: {final_iso}"
+        )
+
+        os.remove(final_iso)
+
+    # ----------------------------------------------------------
+    # Monta comando xorriso
+    # ----------------------------------------------------------
+
+    command = [
+        "xorriso",
         "-as", "mkisofs",
+
+        # ISO filesystem
         "-r",
         "-V", "CustomLinux",
         "-J",
         "-l",
         "-iso-level", "3",
-        "-isohybrid-mbr", "/usr/lib/ISOLINUX/isohdpfx.bin",
-        "-c", "isolinux/boot.cat",
-        "-b", "isolinux/isolinux.bin",
+
+        # MBR híbrido
+        "-isohybrid-mbr", isohdpfx,
+
+        # BIOS / El Torito
+        "-c", boot_config["boot_catalog"],
+        "-b", boot_config["boot_image"],
         "-no-emul-boot",
         "-boot-load-size", "4",
         "-boot-info-table",
+
+        # UEFI
         "-eltorito-alt-boot",
-        "-e", "EFI/boot/bootx64.efi",
+        "-e", boot_config["efi_image"],
         "-no-emul-boot",
+
+        # GPT híbrido
         "-isohybrid-gpt-basdat",
+
+        # Saída
         "-o", final_iso,
-        iso_root
-    ])
+
+        # Conteúdo
+        iso_root,
+    ]
+
+    print()
+    print("DEBUG comando xorriso:")
+
+    print(
+        " ".join(
+            f'"{arg}"' if " " in arg else arg
+            for arg in command
+        )
+    )
+
+    print()
+
+    # ----------------------------------------------------------
+    # Executa xorriso
+    # ----------------------------------------------------------
+
+    run(command)
+
+    # ----------------------------------------------------------
+    # Verifica se a ISO realmente foi criada
+    # ----------------------------------------------------------
+
+    if not os.path.exists(final_iso):
+        raise RuntimeError(
+            "O xorriso terminou, mas a ISO final "
+            "não foi encontrada."
+        )
+
+    iso_size = os.path.getsize(final_iso)
+
+    if iso_size == 0:
+        raise RuntimeError(
+            "A ISO final foi criada, mas está vazia."
+        )
+
+    progress_callback(
+        100,
+        "ISO criada com sucesso!"
+    )
+
+    print(
+        f"ISO criada com sucesso: {final_iso}"
+    )
+
+    print(
+        f"DEBUG tamanho da ISO: "
+        f"{iso_size / (1024 ** 2):.2f} MB"
+    )
+
+    return final_iso
