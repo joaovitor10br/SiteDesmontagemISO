@@ -3,6 +3,8 @@ import platform
 import shutil
 import subprocess
 import tempfile
+import hashlib
+import re
 
 
 # ==========================================================
@@ -128,7 +130,15 @@ def validate_dependencies():
 
 def find_isohdpfx():
     """
-    Procura pelo isohdpfx.bin usado na criação da ISO híbrida.
+    Procura pelo isohdpfx.bin usado na criação de ISOs
+    híbridas BIOS/MBR.
+
+    Esta função é usada somente no fluxo Debian/Ubuntu.
+
+    Para Arch Linux usamos xorriso em modo replay, pois a ISO
+    Arch atual possui informações de boot híbrido MBR/GPT e
+    uma imagem EFI El Torito que não deve ser reconstruída
+    manualmente a partir da árvore extraída.
     """
 
     possible_paths = [
@@ -136,7 +146,7 @@ def find_isohdpfx():
         "/usr/lib/syslinux/isohdpfx.bin",
         "/usr/lib/syslinux/bios/isohdpfx.bin",
         "/usr/share/syslinux/isohdpfx.bin",
-        "/usr/share/syslinux/isohdpfx.bin",
+        "/usr/share/syslinux/bios/isohdpfx.bin",
     ]
 
     for path in possible_paths:
@@ -371,6 +381,81 @@ def detect_distro(iso_root):
     )
 
 
+def detect_squashfs_compression(squashfs_path):
+    """
+    Detecta o algoritmo de compressão usado pelo SquashFS
+    original para que o arquivo reconstruído mantenha a
+    mesma compressão.
+
+    Exemplos:
+        xz
+        zstd
+        gzip
+        lzo
+        lz4
+
+    Se não for possível detectar, usa xz como fallback.
+    """
+
+    result = run([
+        "unsquashfs",
+        "-s",
+        squashfs_path
+    ])
+
+    output = (result.stdout or "") + (result.stderr or "")
+
+    # Em algumas versões a saída é escrita em stderr.
+    if not output:
+        probe = subprocess.run(
+            [
+                "unsquashfs",
+                "-s",
+                squashfs_path
+            ],
+            capture_output=True,
+            text=True
+        )
+
+        output = (
+            (probe.stdout or "")
+            + (probe.stderr or "")
+        )
+
+    match = re.search(
+        r"Compression\s+([A-Za-z0-9_-]+)",
+        output,
+        re.IGNORECASE
+    )
+
+    if match:
+        compression = match.group(1).lower()
+
+        allowed = {
+            "xz",
+            "zstd",
+            "gzip",
+            "lzo",
+            "lz4",
+            "lzma",
+        }
+
+        if compression in allowed:
+            print(
+                f"DEBUG compressão SquashFS detectada: "
+                f"{compression}"
+            )
+
+            return compression
+
+    print(
+        "WARNING: não foi possível detectar a compressão "
+        "do SquashFS. Usando xz."
+    )
+
+    return "xz"
+
+
 # ==========================================================
 # Chroot
 # ==========================================================
@@ -435,10 +520,14 @@ def configure_dns(work_dir):
 
 def mount_chroot_filesystems(work_dir):
     """
-    Monta /dev, /proc, /sys e /run dentro do chroot.
+    Monta os pseudo-filesystems necessários para o chroot.
 
-    Returns:
-        Lista contendo os pontos de montagem realizados.
+    IMPORTANTE:
+        O /run do sistema hospedeiro NÃO é montado dentro
+        do chroot. Usamos um tmpfs isolado para impedir que
+        montagens FUSE do desktop (GVFS, portal etc.) entrem
+        na árvore que posteriormente será empacotada pelo
+        mksquashfs.
     """
 
     dev_dir = os.path.join(
@@ -529,25 +618,32 @@ def mount_chroot_filesystems(work_dir):
 
         # --------------------------------------------------
         # /run
+        #
+        # NÃO usar:
+        #
+        #     mount --rbind /run run_dir
+        #
+        # porque isso traz GVFS, portal, FUSE etc.
+        #
         # --------------------------------------------------
 
         run([
             "sudo",
             "mount",
-            "--rbind",
-            "/run",
-            run_dir
-        ])
-
-        run([
-            "sudo",
-            "mount",
-            "--make-rslave",
+            "-t",
+            "tmpfs",
+            "-o",
+            "mode=755",
+            "tmpfs",
             run_dir
         ])
 
         mounted.append(
-            ("recursive", run_dir)
+            ("normal", run_dir)
+        )
+
+        print(
+            "DEBUG chroot montado com /run isolado."
         )
 
         return mounted
@@ -568,7 +664,9 @@ def unmount_chroot_filesystems(mounted):
     for mount_type, mount_point in reversed(
         mounted
     ):
+
         if mount_type == "recursive":
+
             run([
                 "sudo",
                 "umount",
@@ -577,11 +675,16 @@ def unmount_chroot_filesystems(mounted):
             ], check=False)
 
         else:
+
             run([
                 "sudo",
                 "umount",
                 mount_point
             ], check=False)
+
+    print(
+        "DEBUG ambiente chroot desmontado."
+    )
 
 
 def test_chroot(work_dir):
@@ -795,6 +898,7 @@ def customize_live_system(
         Dicionário contendo:
             distro
             squashfs_path
+            squashfs_compression
             work_dir
     """
 
@@ -819,6 +923,10 @@ def customize_live_system(
         iso_root
     )
 
+    squashfs_compression = detect_squashfs_compression(
+        squashfs_path
+    )
+
     work_dir = os.path.join(
         iso_root,
         "squashfs-root"
@@ -830,6 +938,11 @@ def customize_live_system(
 
     print(
         f"DEBUG SquashFS: {squashfs_path}"
+    )
+
+    print(
+        f"DEBUG compressão SquashFS: "
+        f"{squashfs_compression}"
     )
 
     print(
@@ -984,6 +1097,7 @@ def customize_live_system(
     return {
         "distro": distro,
         "squashfs_path": squashfs_path,
+        "squashfs_compression": squashfs_compression,
         "work_dir": work_dir,
     }
 
@@ -995,7 +1109,8 @@ def customize_live_system(
 def rebuild_squashfs(
     squashfs_path,
     work_dir,
-    progress_callback=None
+    progress_callback=None,
+    compression=None
 ):
     """
     Reconstrói o SquashFS.
@@ -1003,6 +1118,9 @@ def rebuild_squashfs(
     O novo SquashFS é criado primeiro em um arquivo temporário.
     O original somente é substituído depois que o novo arquivo
     foi criado e validado.
+
+    A compressão original pode ser informada para preservar a
+    estrutura da ISO. Se não for informada, usa xz.
     """
 
     squashfs_path = os.path.abspath(
@@ -1018,6 +1136,11 @@ def rebuild_squashfs(
             f"Diretório do sistema não encontrado: "
             f"{work_dir}"
         )
+
+    compression = (
+        compression
+        or detect_squashfs_compression(squashfs_path)
+    )
 
     report_progress(
         progress_callback,
@@ -1041,13 +1164,18 @@ def rebuild_squashfs(
             f"{temp_squashfs}"
         )
 
+        print(
+            f"DEBUG usando compressão SquashFS: "
+            f"{compression}"
+        )
+
         run([
             "sudo",
             "mksquashfs",
             work_dir,
             temp_squashfs,
             "-comp",
-            "xz",
+            compression,
             "-noappend"
         ])
 
@@ -1071,6 +1199,16 @@ def rebuild_squashfs(
             f"DEBUG novo SquashFS: "
             f"{size / (1024 ** 2):.2f} MB"
         )
+
+        # --------------------------------------------------
+        # Validação rápida do novo SquashFS
+        # --------------------------------------------------
+
+        run([
+            "unsquashfs",
+            "-s",
+            temp_squashfs
+        ])
 
         # --------------------------------------------------
         # Substitui somente depois da validação
@@ -1103,6 +1241,108 @@ def rebuild_squashfs(
     )
 
     return squashfs_path
+
+
+# ==========================================================
+# Arquivos auxiliares do Arch ISO
+# ==========================================================
+
+def update_arch_squashfs_checksum(
+    iso_root,
+    squashfs_path
+):
+    """
+    Atualiza o arquivo airootfs.sha512 da ISO Arch.
+
+    Isso evita deixar o checksum apontando para o SquashFS
+    original depois que o sistema interno foi modificado.
+    """
+
+    relative_squashfs = os.path.relpath(
+        squashfs_path,
+        iso_root
+    ).replace(
+        os.sep,
+        "/"
+    )
+
+    checksum_path = os.path.join(
+        iso_root,
+        "arch",
+        "x86_64",
+        "airootfs.sha512"
+    )
+
+    ensure_directory(
+        os.path.dirname(checksum_path)
+    )
+
+    sha512 = hashlib.sha512()
+
+    with open(
+        squashfs_path,
+        "rb"
+    ) as source:
+        while True:
+            chunk = source.read(
+                1024 * 1024
+            )
+
+            if not chunk:
+                break
+
+            sha512.update(chunk)
+
+    digest = sha512.hexdigest()
+
+    # O formato tradicional do sha512sum usa:
+    # <hash>  <arquivo>
+    with open(
+        checksum_path,
+        "w",
+        encoding="utf-8"
+    ) as checksum_file:
+        checksum_file.write(
+            f"{digest}  {relative_squashfs}\n"
+        )
+
+    print(
+        f"DEBUG checksum SHA-512 atualizado: "
+        f"{checksum_path}"
+    )
+
+    return checksum_path
+
+
+def remove_arch_backup_files(iso_root):
+    """
+    Remove arquivos .backup criados durante testes ou
+    personalizações anteriores.
+
+    Isso é importante porque um ISO reconstruído a partir
+    da árvore completa poderia acabar carregando esses
+    arquivos para dentro da imagem.
+
+    No fluxo Arch atual, o xorriso replay não copia a árvore
+    inteira, mas ainda assim mantemos a árvore limpa.
+    """
+
+    candidates = [
+        os.path.join(
+            iso_root,
+            "arch",
+            "x86_64",
+            "airootfs.sfs.backup"
+        ),
+    ]
+
+    for path in candidates:
+        if os.path.exists(path):
+            print(
+                f"DEBUG removendo backup do Arch: {path}"
+            )
+
+            remove_path(path)
 
 
 # ==========================================================
@@ -1145,8 +1385,10 @@ def detect_boot_config(iso_root):
 
     efi_candidates = [
         "EFI/BOOT/BOOTX64.EFI",
+        "EFI/BOOT/BOOTx64.EFI",
         "EFI/BOOT/bootx64.efi",
         "EFI/boot/BOOTX64.EFI",
+        "EFI/boot/BOOTx64.EFI",
         "EFI/boot/bootx64.efi",
         "EFI/BOOT/grubx64.efi",
         "EFI/boot/grubx64.efi",
@@ -1236,19 +1478,19 @@ def detect_boot_config(iso_root):
 
 
 # ==========================================================
-# Criação da ISO
+# Criação da ISO - Debian / Ubuntu
 # ==========================================================
 
-def create_bootable_iso(
+def create_debian_bootable_iso(
     iso_root,
     output_dir,
     progress_callback=None
 ):
     """
-    Cria a ISO final usando xorriso.
+    Cria a ISO Debian/Ubuntu usando o fluxo tradicional
+    xorriso -as mkisofs.
 
-    A ISO temporária é criada fora de iso_root para impedir
-    que o xorriso tente incluir a própria ISO dentro da imagem.
+    ESTA PARTE MANTÉM O FLUXO ORIGINAL DO PROJETO.
     """
 
     iso_root = os.path.abspath(
@@ -1295,10 +1537,6 @@ def create_bootable_iso(
         f"{boot_config['efi_image']}"
     )
 
-    # ------------------------------------------------------
-    # Valida arquivos
-    # ------------------------------------------------------
-
     boot_image_path = os.path.join(
         iso_root,
         boot_config["boot_image"]
@@ -1325,10 +1563,6 @@ def create_bootable_iso(
             f"{efi_image_path}"
         )
 
-    # ------------------------------------------------------
-    # Diretório temporário para a ISO
-    # ------------------------------------------------------
-
     temp_output_dir = tempfile.mkdtemp(
         prefix="iso-output-"
     )
@@ -1348,10 +1582,6 @@ def create_bootable_iso(
             remove_path(
                 final_iso
             )
-
-        # --------------------------------------------------
-        # xorriso
-        # --------------------------------------------------
 
         command = [
             "xorriso",
@@ -1402,7 +1632,7 @@ def create_bootable_iso(
 
         print()
         print(
-            "DEBUG comando xorriso:"
+            "DEBUG comando xorriso Debian/Ubuntu:"
         )
 
         print(
@@ -1415,10 +1645,6 @@ def create_bootable_iso(
         print()
 
         run(command)
-
-        # --------------------------------------------------
-        # Validação
-        # --------------------------------------------------
 
         if not os.path.isfile(
             temp_iso
@@ -1447,10 +1673,6 @@ def create_bootable_iso(
             f"{iso_size / (1024 ** 2):.2f} MB"
         )
 
-        # --------------------------------------------------
-        # Move para o destino final
-        # --------------------------------------------------
-
         shutil.move(
             temp_iso,
             final_iso
@@ -1474,6 +1696,352 @@ def create_bootable_iso(
     )
 
     return final_iso
+
+
+# ==========================================================
+# Criação da ISO - Arch Linux
+# ==========================================================
+
+def create_arch_bootable_iso(
+    original_iso,
+    iso_root,
+    squashfs_path,
+    output_dir,
+    progress_callback=None
+):
+    """
+    Cria uma ISO Arch Linux preservando o boot original.
+
+    IMPORTANTE:
+
+    Não usamos:
+
+        xorriso -as mkisofs
+        -isohybrid-mbr
+        -isohybrid-gpt-basdat
+        -e EFI/BOOT/BOOTX64.EFI
+
+    para a ISO Arch atual.
+
+    A ISO Arch detectada no projeto possui:
+
+        MBR híbrido
+        GPT híbrido
+        El Torito BIOS
+        El Torito UEFI
+        imagem EFI escondida / anexada
+
+    Portanto reconstruir o boot manualmente pode produzir uma
+    ISO que contém os arquivos, mas não inicializa corretamente.
+
+    Em vez disso usamos o recurso "replay" do xorriso:
+
+        -indev original.iso
+        -outdev nova.iso
+        -map novo_sfs /arch/x86_64/airootfs.sfs
+        -boot_image any replay
+        -commit
+        -end
+
+    Assim o xorriso reaproveita a estrutura de boot da ISO
+    original e troca somente os arquivos que modificamos.
+    """
+
+    original_iso = os.path.abspath(
+        original_iso
+    )
+
+    iso_root = os.path.abspath(
+        iso_root
+    )
+
+    squashfs_path = os.path.abspath(
+        squashfs_path
+    )
+
+    output_dir = os.path.abspath(
+        output_dir
+    )
+
+    if not os.path.isfile(original_iso):
+        raise RuntimeError(
+            f"ISO original não encontrada: {original_iso}"
+        )
+
+    if not os.path.isfile(squashfs_path):
+        raise RuntimeError(
+            f"SquashFS personalizado não encontrado: "
+            f"{squashfs_path}"
+        )
+
+    ensure_directory(
+        output_dir
+    )
+
+    report_progress(
+        progress_callback,
+        99,
+        "Reconstruindo ISO Arch preservando o boot original..."
+    )
+
+    temp_output_dir = tempfile.mkdtemp(
+        prefix="arch-iso-output-"
+    )
+
+    temp_iso = os.path.join(
+        temp_output_dir,
+        "custom_arch.iso"
+    )
+
+    final_iso = os.path.join(
+        output_dir,
+        "custom_linux.iso"
+    )
+
+    squashfs_iso_path = (
+        "/arch/x86_64/airootfs.sfs"
+    )
+
+    checksum_path = os.path.join(
+        iso_root,
+        "arch",
+        "x86_64",
+        "airootfs.sha512"
+    )
+
+    try:
+        if os.path.exists(final_iso):
+            remove_path(
+                final_iso
+            )
+
+        # --------------------------------------------------
+        # O arquivo checksum também foi modificado.
+        # --------------------------------------------------
+
+        map_checksum = os.path.isfile(
+            checksum_path
+        )
+
+        command = [
+            "xorriso",
+
+            # ISO original
+            "-indev",
+            original_iso,
+
+            # ISO nova
+            "-outdev",
+            temp_iso,
+
+            # Substitui o SquashFS original pelo novo.
+            "-map",
+            squashfs_path,
+            squashfs_iso_path,
+        ]
+
+        if map_checksum:
+            command.extend([
+                "-map",
+                checksum_path,
+                "/arch/x86_64/airootfs.sha512",
+            ])
+
+        # --------------------------------------------------
+        # Reaproveita exatamente as informações de boot
+        # da ISO original.
+        # --------------------------------------------------
+
+        command.extend([
+            "-boot_image",
+            "any",
+            "replay",
+
+            "-commit",
+            "-end",
+        ])
+
+        print()
+        print(
+            "DEBUG comando xorriso Arch:"
+        )
+
+        print(
+            " ".join(
+                f'"{arg}"' if " " in arg else arg
+                for arg in command
+            )
+        )
+
+        print()
+
+        run(command)
+
+        if not os.path.isfile(
+            temp_iso
+        ):
+            raise RuntimeError(
+                "O xorriso terminou, "
+                "mas a ISO Arch não foi criada."
+            )
+
+        iso_size = os.path.getsize(
+            temp_iso
+        )
+
+        if iso_size <= 0:
+            raise RuntimeError(
+                "A ISO Arch criada está vazia."
+            )
+
+        print(
+            f"DEBUG ISO Arch temporária criada: "
+            f"{temp_iso}"
+        )
+
+        print(
+            f"DEBUG tamanho da ISO Arch: "
+            f"{iso_size / (1024 ** 3):.2f} GB"
+        )
+
+        # --------------------------------------------------
+        # Validação da estrutura de boot.
+        #
+        # Não reconstruímos o boot; apenas verificamos que
+        # o resultado ainda contém as informações El Torito.
+        # --------------------------------------------------
+
+        report_progress(
+            progress_callback,
+            99,
+            "Validando boot da ISO Arch..."
+        )
+
+        validation = subprocess.run(
+            [
+                "xorriso",
+                "-indev",
+                temp_iso,
+                "-report_el_torito",
+                "plain",
+                "-report_system_area",
+                "plain",
+            ],
+            capture_output=True,
+            text=True
+        )
+
+        validation_output = (
+            (validation.stdout or "")
+            + "\n"
+            + (validation.stderr or "")
+        )
+
+        print(
+            "DEBUG validação El Torito/System Area:"
+        )
+        print(
+            validation_output
+        )
+
+        if validation.returncode != 0:
+            raise RuntimeError(
+                "Falha ao validar a estrutura de boot "
+                "da ISO Arch."
+            )
+
+        if "El Torito" not in validation_output:
+            raise RuntimeError(
+                "A ISO Arch resultante não apresenta "
+                "informações El Torito."
+            )
+
+        if "UEFI" not in validation_output:
+            raise RuntimeError(
+                "A ISO Arch resultante não apresenta "
+                "uma entrada UEFI no El Torito."
+            )
+
+        # --------------------------------------------------
+        # Move para o destino final.
+        # --------------------------------------------------
+
+        shutil.move(
+            temp_iso,
+            final_iso
+        )
+
+    finally:
+        shutil.rmtree(
+            temp_output_dir,
+            ignore_errors=True
+        )
+
+    print(
+        f"ISO Arch criada com sucesso: "
+        f"{final_iso}"
+    )
+
+    report_progress(
+        progress_callback,
+        100,
+        "ISO Arch criada com sucesso!"
+    )
+
+    return final_iso
+
+
+def create_bootable_iso(
+    iso_root,
+    output_dir,
+    progress_callback=None,
+    distro=None,
+    original_iso=None,
+    squashfs_path=None
+):
+    """
+    Seleciona automaticamente o método correto de criação
+    da ISO.
+
+    Debian/Ubuntu:
+        mantém o fluxo tradicional mkisofs.
+
+    Arch:
+        usa xorriso replay para preservar MBR/GPT/El Torito/EFI.
+    """
+
+    if distro == "arch":
+        if not original_iso:
+            raise RuntimeError(
+                "A ISO original é obrigatória para criar "
+                "uma ISO Arch usando replay."
+            )
+
+        if not squashfs_path:
+            raise RuntimeError(
+                "O caminho do SquashFS é obrigatório "
+                "para criar a ISO Arch."
+            )
+
+        return create_arch_bootable_iso(
+            original_iso,
+            iso_root,
+            squashfs_path,
+            output_dir,
+            progress_callback
+        )
+
+    if distro == "debian":
+        return create_debian_bootable_iso(
+            iso_root,
+            output_dir,
+            progress_callback
+        )
+
+    raise RuntimeError(
+        f"Distribuição não suportada para criação da ISO: "
+        f"{distro}"
+    )
 
 
 # ==========================================================
@@ -1522,6 +2090,8 @@ def build_iso(
             ↓
         Detecção do SquashFS
             ↓
+        Detecção da distribuição
+            ↓
         Extração do sistema
             ↓
         Chroot
@@ -1532,9 +2102,20 @@ def build_iso(
             ↓
         Reconstrução do SquashFS
             ↓
-        Reconstrução da ISO
+        Debian/Ubuntu:
+            reconstrução tradicional
+        Arch:
+            replay do boot original
             ↓
         ISO final
+
+    IMPORTANTE:
+
+    O fluxo Debian/Ubuntu continua usando o método anterior.
+
+    A diferença principal está no Arch Linux: em vez de tentar
+    reconstruir manualmente MBR/GPT/EFI com mkisofs, preservamos
+    a estrutura de boot da ISO original através do xorriso replay.
     """
 
     iso_path = os.path.abspath(
@@ -1619,6 +2200,21 @@ def build_iso(
     )
 
     # ------------------------------------------------------
+    # Detecta distribuição ANTES da personalização.
+    # ------------------------------------------------------
+
+    distro = detect_distro(
+        out_dir
+    )
+
+    print(
+        f"DEBUG distribuição detectada no build: "
+        f"{distro}"
+    )
+
+    result = None
+
+    # ------------------------------------------------------
     # Personalização
     # ------------------------------------------------------
 
@@ -1632,11 +2228,29 @@ def build_iso(
         rebuild_squashfs(
             result["squashfs_path"],
             result["work_dir"],
-            progress_callback
+            progress_callback,
+            result.get("squashfs_compression")
         )
 
-        # O diretório squashfs-root não pertence mais ao
-        # conteúdo final da ISO e não deve ser incluído.
+        # --------------------------------------------------
+        # Arch: atualiza SHA-512 depois de recriar o SFS.
+        # --------------------------------------------------
+
+        if distro == "arch":
+            update_arch_squashfs_checksum(
+                out_dir,
+                result["squashfs_path"]
+            )
+
+            remove_arch_backup_files(
+                out_dir
+            )
+
+        # --------------------------------------------------
+        # O diretório squashfs-root não pertence ao conteúdo
+        # final da ISO.
+        # --------------------------------------------------
+
         if os.path.exists(
             result["work_dir"]
         ):
@@ -1644,15 +2258,76 @@ def build_iso(
                 result["work_dir"]
             )
 
+    else:
+        # Mesmo sem personalização, a árvore extraída pode
+        # conter arquivos de testes antigos.
+        if distro == "arch":
+            remove_arch_backup_files(
+                out_dir
+            )
+
     # ------------------------------------------------------
     # Criação da ISO
     # ------------------------------------------------------
 
-    final_iso = create_bootable_iso(
-        out_dir,
-        out_dir,
-        progress_callback
-    )
+    if distro == "arch":
+        # --------------------------------------------------
+        # Se não houve personalização, não precisamos
+        # reconstruir nada: basta copiar a ISO original.
+        # --------------------------------------------------
+
+        if result is None:
+            report_progress(
+                progress_callback,
+                99,
+                "Nenhuma personalização solicitada. "
+                "Copiando ISO Arch original..."
+            )
+
+            final_iso = os.path.join(
+                out_dir,
+                "custom_linux.iso"
+            )
+
+            if os.path.exists(final_iso):
+                remove_path(
+                    final_iso
+                )
+
+            shutil.copy2(
+                iso_path,
+                final_iso
+            )
+
+            report_progress(
+                progress_callback,
+                100,
+                "ISO criada com sucesso!"
+            )
+
+        else:
+            final_iso = create_bootable_iso(
+                out_dir,
+                out_dir,
+                progress_callback,
+                distro="arch",
+                original_iso=iso_path,
+                squashfs_path=result["squashfs_path"]
+            )
+
+    else:
+        final_iso = create_bootable_iso(
+            out_dir,
+            out_dir,
+            progress_callback,
+            distro="debian",
+            original_iso=iso_path,
+            squashfs_path=(
+                result["squashfs_path"]
+                if result
+                else None
+            )
+        )
 
     report_progress(
         progress_callback,
@@ -1664,4 +2339,5 @@ def build_iso(
         "method": "iso",
         "status": "ok",
         "path": final_iso,
+        "distro": distro,
     }
