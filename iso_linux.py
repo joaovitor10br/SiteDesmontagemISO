@@ -20,14 +20,51 @@ def report_progress(progress_callback, percent, message):
         progress_callback(percent, message)
 
 
-def run(cmd, check=True, allow_codes=(0,)):
+def require_root():
+    """
+    O processo de criação da ISO precisa estar executando
+    como root.
+
+    IMPORTANTE:
+        Este arquivo NÃO usa sudo internamente.
+
+    Isso evita que o Flask fique parado esperando uma senha
+    no meio do processo de criação da ISO.
+    """
+
+    if os.name != "posix":
+        raise RuntimeError(
+            "A criação da ISO exige um sistema POSIX/Linux."
+        )
+
+    if hasattr(os, "geteuid") and os.geteuid() != 0:
+        raise PermissionError(
+            "O processo de criação da ISO precisa ser executado "
+            "como root.\n\n"
+            "Inicie o backend com:\n"
+            "    sudo python3 app.py\n\n"
+            "ou, usando o ambiente virtual:\n"
+            "    sudo ./venv/bin/python app.py\n\n"
+            "O iso_linux.py não executa sudo internamente."
+        )
+
+
+def run(
+    cmd,
+    check=True,
+    allow_codes=(0,),
+    capture_output=False,
+    text=False
+):
     """
     Executa um comando externo.
 
     Args:
         cmd: lista contendo comando e argumentos.
         check: se True, gera exceção para códigos não permitidos.
-        allow_codes: códigos de retorno considerados válidos.
+        allow_codes: código ou coleção de códigos aceitos.
+        capture_output: captura stdout/stderr.
+        text: retorna saída como texto.
 
     Returns:
         subprocess.CompletedProcess
@@ -37,12 +74,23 @@ def run(cmd, check=True, allow_codes=(0,)):
 
     print("+", " ".join(cmd))
 
-    result = subprocess.run(cmd)
+    if isinstance(allow_codes, int):
+        allowed_codes = {allow_codes}
+    else:
+        allowed_codes = set(allow_codes)
 
-    if check and result.returncode not in allow_codes:
+    result = subprocess.run(
+        cmd,
+        capture_output=capture_output,
+        text=text
+    )
+
+    if check and result.returncode not in allowed_codes:
         raise subprocess.CalledProcessError(
             result.returncode,
-            cmd
+            cmd,
+            output=result.stdout,
+            stderr=result.stderr
         )
 
     return result
@@ -56,13 +104,45 @@ def has_executable(name):
     return shutil.which(name) is not None
 
 
+def is_mounted(path):
+    """
+    Verifica se um caminho está atualmente montado, lendo
+    /proc/mounts diretamente (não depende de ferramentas
+    externas como findmnt).
+
+    Usado para confirmar que um "umount" realmente funcionou
+    antes de seguir para o mksquashfs -- ver comentário em
+    unmount_chroot_filesystems() para o motivo disso importar.
+    """
+
+    real_path = os.path.realpath(path)
+
+    try:
+        with open("/proc/mounts", "r", encoding="utf-8") as mounts_file:
+            for line in mounts_file:
+                fields = line.split()
+
+                if len(fields) >= 2:
+                    mount_point = fields[1].encode(
+                        "utf-8"
+                    ).decode("unicode_escape")
+
+                    if os.path.realpath(mount_point) == real_path:
+                        return True
+
+    except OSError:
+        return False
+
+    return False
+
+
 def remove_path(path):
     """
     Remove arquivo, link ou diretório.
 
-    Os arquivos relacionados ao processo de criação da ISO
-    frequentemente pertencem ao root por causa de unsquashfs,
-    chroot e mksquashfs. Por isso a remoção usa sudo.
+    NÃO usa sudo.
+
+    O processo inteiro deve estar executando como root.
     """
 
     if not os.path.lexists(path):
@@ -70,14 +150,12 @@ def remove_path(path):
 
     if os.path.isdir(path) and not os.path.islink(path):
         run([
-            "sudo",
             "rm",
             "-rf",
             path
         ])
     else:
         run([
-            "sudo",
             "rm",
             "-f",
             path
@@ -109,6 +187,10 @@ def validate_dependencies():
         "unsquashfs",
         "mksquashfs",
         "xorriso",
+        "mount",
+        "umount",
+        "chroot",
+        "rsync",
     ]
 
     missing = [
@@ -133,12 +215,7 @@ def find_isohdpfx():
     Procura pelo isohdpfx.bin usado na criação de ISOs
     híbridas BIOS/MBR.
 
-    Esta função é usada somente no fluxo Debian/Ubuntu.
-
-    Para Arch Linux usamos xorriso em modo replay, pois a ISO
-    Arch atual possui informações de boot híbrido MBR/GPT e
-    uma imagem EFI El Torito que não deve ser reconstruída
-    manualmente a partir da árvore extraída.
+    Usado somente no fluxo Debian/Ubuntu.
     """
 
     possible_paths = [
@@ -163,9 +240,46 @@ def find_isohdpfx():
 # Extração da ISO
 # ==========================================================
 
+def extract_iso(iso_path, out_dir):
+    """
+    Extrai o conteúdo completo da ISO usando xorriso (osirrox).
+
+    Por que trocar o 7z pelo xorriso:
+        O 7z, ao extrair um filesystem ISO9660/Rock Ridge, não
+        preserva de forma confiável symlinks, permissões e
+        atributos especiais -- em alguns casos um symlink vira
+        um arquivo comum contendo o caminho de destino como
+        texto. Isso é particularmente arriscado para a estrutura
+        de boot EFI, que depende de arquivos exatamente como
+        estão no disco original. O xorriso -osirrox é a mesma
+        ferramenta usada para regravar a ISO, então extrai com
+        fidelidade total.
+    """
+
+    iso_path = os.path.abspath(iso_path)
+    out_dir = os.path.abspath(out_dir)
+
+    if not os.path.isfile(iso_path):
+        raise RuntimeError(
+            f"ISO não encontrada: {iso_path}"
+        )
+
+    ensure_directory(out_dir)
+
+    run([
+        "xorriso",
+        "-osirrox", "on",
+        "-indev", iso_path,
+        "-extract", "/", out_dir,
+    ])
+
+
 def extract_with_7z(iso_path, out_dir):
     """
     Extrai o conteúdo da ISO usando 7z.
+
+    Mantido como fallback caso o xorriso falhe na extração
+    (ver extract_iso). Não é mais o método primário.
     """
 
     if not has_executable("7z"):
@@ -200,13 +314,15 @@ def mount_loop_linux_and_copy(
     """
     Monta uma ISO somente leitura e copia seu conteúdo.
 
-    Esta função é mantida como alternativa à extração por 7z.
+    NÃO usa sudo.
     """
 
     if platform.system() != "Linux":
         raise RuntimeError(
             "A montagem de ISO está disponível somente no Linux."
         )
+
+    require_root()
 
     iso_path = os.path.abspath(iso_path)
     out_dir = os.path.abspath(out_dir)
@@ -224,24 +340,13 @@ def mount_loop_linux_and_copy(
             "Montando ISO..."
         )
 
-        try:
-            run([
-                "mount",
-                "-o",
-                "loop,ro",
-                iso_path,
-                mount_dir
-            ])
-
-        except subprocess.CalledProcessError:
-            run([
-                "sudo",
-                "mount",
-                "-o",
-                "loop,ro",
-                iso_path,
-                mount_dir
-            ])
+        run([
+            "mount",
+            "-o",
+            "loop,ro",
+            iso_path,
+            mount_dir
+        ])
 
         mounted = True
 
@@ -254,7 +359,6 @@ def mount_loop_linux_and_copy(
         )
 
         run([
-            "sudo",
             "rsync",
             "-aH",
             "--delete",
@@ -270,17 +374,10 @@ def mount_loop_linux_and_copy(
                 "Desmontando ISO..."
             )
 
-            result = run([
+            run([
                 "umount",
                 mount_dir
             ], check=False)
-
-            if result.returncode != 0:
-                run([
-                    "sudo",
-                    "umount",
-                    mount_dir
-                ], check=False)
 
         try:
             os.rmdir(mount_dir)
@@ -296,14 +393,12 @@ def detect_squashfs(iso_root):
     """
     Detecta o SquashFS presente na ISO.
 
-    Suporta estruturas comuns de:
+    Debian / Ubuntu:
+        casper/filesystem.squashfs
+        live/filesystem.squashfs
 
-        Debian / Ubuntu:
-            casper/filesystem.squashfs
-            live/filesystem.squashfs
-
-        Arch:
-            arch/x86_64/airootfs.sfs
+    Arch:
+        arch/x86_64/airootfs.sfs
     """
 
     iso_root = os.path.abspath(iso_root)
@@ -383,44 +478,24 @@ def detect_distro(iso_root):
 
 def detect_squashfs_compression(squashfs_path):
     """
-    Detecta o algoritmo de compressão usado pelo SquashFS
-    original para que o arquivo reconstruído mantenha a
-    mesma compressão.
-
-    Exemplos:
-        xz
-        zstd
-        gzip
-        lzo
-        lz4
-
-    Se não for possível detectar, usa xz como fallback.
+    Detecta a compressão usada pelo SquashFS original.
     """
 
-    result = run([
-        "unsquashfs",
-        "-s",
-        squashfs_path
-    ])
+    result = run(
+        [
+            "unsquashfs",
+            "-s",
+            squashfs_path
+        ],
+        capture_output=True,
+        text=True
+    )
 
-    output = (result.stdout or "") + (result.stderr or "")
-
-    # Em algumas versões a saída é escrita em stderr.
-    if not output:
-        probe = subprocess.run(
-            [
-                "unsquashfs",
-                "-s",
-                squashfs_path
-            ],
-            capture_output=True,
-            text=True
-        )
-
-        output = (
-            (probe.stdout or "")
-            + (probe.stderr or "")
-        )
+    output = (
+        (result.stdout or "")
+        + "\n"
+        + (result.stderr or "")
+    )
 
     match = re.search(
         r"Compression\s+([A-Za-z0-9_-]+)",
@@ -463,7 +538,11 @@ def detect_squashfs_compression(squashfs_path):
 def prepare_chroot(work_dir):
     """
     Cria os diretórios necessários para o ambiente chroot.
+
+    NÃO usa sudo.
     """
+
+    require_root()
 
     directories = [
         os.path.join(work_dir, "dev"),
@@ -474,7 +553,6 @@ def prepare_chroot(work_dir):
 
     for directory in directories:
         run([
-            "sudo",
             "mkdir",
             "-p",
             directory
@@ -483,9 +561,83 @@ def prepare_chroot(work_dir):
 
 def configure_dns(work_dir):
     """
-    Copia o resolv.conf do sistema hospedeiro
-    para dentro do sistema Live.
+    Copia o resolv.conf do sistema hospedeiro para dentro do
+    sistema Live, TEMPORARIAMENTE, apenas para que a instalação
+    de pacotes dentro do chroot tenha resolução de DNS.
+
+    Antes de sobrescrever, guarda o estado original (arquivo
+    normal, symlink, ou inexistente) para que restore_dns()
+    possa desfazer isso depois. Sem essa restauração, a ISO
+    final seria distribuída com a configuração de DNS do
+    computador usado para o build, o que não faz sentido para
+    quem for usar a ISO em outra rede.
     """
+
+    require_root()
+
+    resolv_conf = os.path.join(
+        work_dir,
+        "etc",
+        "resolv.conf"
+    )
+
+    state = {
+        "existed": False,
+        "is_symlink": False,
+        "target": None,
+        "backup": None,
+    }
+
+    try:
+        if os.path.islink(resolv_conf):
+            state["existed"] = True
+            state["is_symlink"] = True
+            state["target"] = os.readlink(resolv_conf)
+
+        elif os.path.isfile(resolv_conf):
+            state["existed"] = True
+
+            backup_path = resolv_conf + ".isobuilder-backup"
+
+            shutil.copy2(
+                resolv_conf,
+                backup_path
+            )
+
+            state["backup"] = backup_path
+
+        run([
+            "rm",
+            "-f",
+            resolv_conf
+        ], check=False)
+
+        run([
+            "cp",
+            "/etc/resolv.conf",
+            resolv_conf
+        ])
+
+        print(
+            "DEBUG DNS configurado temporariamente."
+        )
+
+    except Exception as exc:
+        print(
+            f"WARNING: não foi possível configurar DNS: {exc}"
+        )
+
+    return state
+
+
+def restore_dns(work_dir, state):
+    """
+    Restaura o /etc/resolv.conf original do sistema Live,
+    desfazendo configure_dns().
+    """
+
+    if not state:
+        return
 
     resolv_conf = os.path.join(
         work_dir,
@@ -495,60 +647,110 @@ def configure_dns(work_dir):
 
     try:
         run([
-            "sudo",
             "rm",
             "-f",
             resolv_conf
         ], check=False)
 
-        run([
-            "sudo",
-            "cp",
-            "/etc/resolv.conf",
-            resolv_conf
-        ])
+        if state.get("is_symlink") and state.get("target"):
+            os.symlink(
+                state["target"],
+                resolv_conf
+            )
+
+        elif state.get("backup") and os.path.isfile(state["backup"]):
+            shutil.move(
+                state["backup"],
+                resolv_conf
+            )
+
+        # Se não existia antes, simplesmente permanece removido.
 
         print(
-            "DEBUG DNS configurado."
+            "DEBUG DNS original do sistema Live restaurado."
         )
 
     except Exception as exc:
         print(
-            f"WARNING: não foi possível configurar DNS: {exc}"
+            f"WARNING: não foi possível restaurar o DNS original: {exc}"
         )
+
+
+def cleanup_chroot_traces(work_dir, distro):
+    """
+    Remove vestígios deixados pela instalação de pacotes dentro
+    do chroot, antes de desmontar e recriar o SquashFS:
+
+    - locks do dpkg/pacman que, se sobrarem, impedem o
+      gerenciador de pacotes de funcionar no sistema Live
+      já inicializado;
+    - reseta /etc/machine-id (deixando o arquivo vazio), que é
+      o mecanismo padrão do systemd para gerar um ID novo no
+      primeiro boot. Sem isso, toda cópia da ISO gerada
+      compartilharia o mesmo machine-id, o que causa conflitos
+      de D-Bus/NetworkManager/journal quando mais de uma
+      instância roda na mesma rede.
+    """
+
+    require_root()
+
+    machine_id_path = os.path.join(
+        work_dir,
+        "etc",
+        "machine-id"
+    )
+
+    if os.path.isfile(machine_id_path):
+        try:
+            with open(machine_id_path, "w", encoding="utf-8"):
+                pass
+
+            print(
+                "DEBUG machine-id resetado para o primeiro boot."
+            )
+
+        except OSError as exc:
+            print(
+                f"WARNING: não foi possível resetar machine-id: {exc}"
+            )
+
+    if distro == "debian":
+        lock_candidates = [
+            os.path.join(work_dir, "var", "lib", "dpkg", "lock"),
+            os.path.join(work_dir, "var", "lib", "dpkg", "lock-frontend"),
+            os.path.join(work_dir, "var", "cache", "apt", "archives", "lock"),
+        ]
+
+    elif distro == "arch":
+        lock_candidates = [
+            os.path.join(work_dir, "var", "lib", "pacman", "db.lck"),
+        ]
+
+    else:
+        lock_candidates = []
+
+    for lock_path in lock_candidates:
+        if os.path.exists(lock_path):
+            print(
+                f"DEBUG removendo lock residual: {lock_path}"
+            )
+
+            remove_path(lock_path)
 
 
 def mount_chroot_filesystems(work_dir):
     """
     Monta os pseudo-filesystems necessários para o chroot.
 
-    IMPORTANTE:
-        O /run do sistema hospedeiro NÃO é montado dentro
-        do chroot. Usamos um tmpfs isolado para impedir que
-        montagens FUSE do desktop (GVFS, portal etc.) entrem
-        na árvore que posteriormente será empacotada pelo
-        mksquashfs.
+    NÃO usa sudo.
     """
 
-    dev_dir = os.path.join(
-        work_dir,
-        "dev"
-    )
+    require_root()
 
-    proc_dir = os.path.join(
-        work_dir,
-        "proc"
-    )
-
-    sys_dir = os.path.join(
-        work_dir,
-        "sys"
-    )
-
-    run_dir = os.path.join(
-        work_dir,
-        "run"
-    )
+    dev_dir = os.path.join(work_dir, "dev")
+    proc_dir = os.path.join(work_dir, "proc")
+    sys_dir = os.path.join(work_dir, "sys")
+    run_dir = os.path.join(work_dir, "run")
 
     mounted = []
 
@@ -558,7 +760,6 @@ def mount_chroot_filesystems(work_dir):
         # --------------------------------------------------
 
         run([
-            "sudo",
             "mount",
             "--rbind",
             "/dev",
@@ -566,7 +767,6 @@ def mount_chroot_filesystems(work_dir):
         ])
 
         run([
-            "sudo",
             "mount",
             "--make-rslave",
             dev_dir
@@ -581,7 +781,6 @@ def mount_chroot_filesystems(work_dir):
         # --------------------------------------------------
 
         run([
-            "sudo",
             "mount",
             "-t",
             "proc",
@@ -598,7 +797,6 @@ def mount_chroot_filesystems(work_dir):
         # --------------------------------------------------
 
         run([
-            "sudo",
             "mount",
             "--rbind",
             "/sys",
@@ -606,7 +804,6 @@ def mount_chroot_filesystems(work_dir):
         ])
 
         run([
-            "sudo",
             "mount",
             "--make-rslave",
             sys_dir
@@ -618,32 +815,23 @@ def mount_chroot_filesystems(work_dir):
 
         # --------------------------------------------------
         # /run
-        #
-        # NÃO usar:
-        #
-        #     mount --rbind /run run_dir
-        #
-        # porque isso traz GVFS, portal, FUSE etc.
-        #
         # --------------------------------------------------
 
         run([
-            "sudo",
             "mount",
-            "-t",
-            "tmpfs",
-            "-o",
-            "mode=755",
-            "tmpfs",
+            "--rbind",
+            "/run",
+            run_dir
+        ])
+
+        run([
+            "mount",
+            "--make-rslave",
             run_dir
         ])
 
         mounted.append(
-            ("normal", run_dir)
-        )
-
-        print(
-            "DEBUG chroot montado com /run isolado."
+            ("recursive", run_dir)
         )
 
         return mounted
@@ -657,34 +845,63 @@ def mount_chroot_filesystems(work_dir):
 
 def unmount_chroot_filesystems(mounted):
     """
-    Desmonta os pseudo-filesystems do chroot
-    na ordem inversa da montagem.
+    Desmonta os pseudo-filesystems do chroot na ordem inversa
+    da montagem.
+
+    NÃO usa sudo.
+
+    IMPORTANTE (correção de bug):
+        Na versão anterior, "umount" era chamado com
+        check=False e o resultado era simplesmente ignorado.
+        Se algum hook de pós-instalação (muito comum no
+        pacman -- ex.: mkinitcpio, gpg-agent) deixasse um
+        processo vivo usando /dev, /proc, /sys ou /run, o
+        umount falhava e o código seguia em frente mesmo
+        assim, SEM AVISAR. O mksquashfs seguinte então
+        empacotava o conteúdo REAL do sistema hospedeiro
+        (montado via bind) dentro do SquashFS final -- gerando
+        uma ISO corrompida/gigante de forma intermitente e
+        sem erro visível. Esse é um dos motivos mais prováveis
+        de "o Arch às vezes falha sem explicação".
+
+        Agora: confirma que cada ponto realmente foi
+        desmontado (lendo /proc/mounts), tenta "umount -l"
+        (lazy) como segunda tentativa, e se mesmo assim
+        continuar montado, lança uma exceção em vez de
+        continuar silenciosamente.
     """
 
-    for mount_type, mount_point in reversed(
-        mounted
-    ):
+    require_root()
 
+    failures = []
+
+    for mount_type, mount_point in reversed(mounted):
         if mount_type == "recursive":
-
-            run([
-                "sudo",
-                "umount",
-                "-R",
-                mount_point
-            ], check=False)
-
+            run(["umount", "-R", mount_point], check=False)
         else:
+            run(["umount", mount_point], check=False)
 
-            run([
-                "sudo",
-                "umount",
-                mount_point
-            ], check=False)
+        if is_mounted(mount_point):
+            print(
+                f"WARNING: {mount_point} continua montado após "
+                f"umount normal, tentando desmonte lazy (-l)..."
+            )
 
-    print(
-        "DEBUG ambiente chroot desmontado."
-    )
+            run(["umount", "-l", mount_point], check=False)
+
+        if is_mounted(mount_point):
+            failures.append(mount_point)
+
+    if failures:
+        raise RuntimeError(
+            "Falha ao desmontar os seguintes pontos do chroot: "
+            + ", ".join(failures)
+            + ". O processo foi interrompido para evitar gerar "
+            "um SquashFS corrompido com arquivos do sistema "
+            "hospedeiro. Verifique processos presos com "
+            "'lsof +D <caminho>' ou 'fuser -vm <caminho>' e "
+            "tente novamente."
+        )
 
 
 def test_chroot(work_dir):
@@ -692,8 +909,9 @@ def test_chroot(work_dir):
     Testa se o sistema extraído consegue iniciar um chroot.
     """
 
+    require_root()
+
     run([
-        "sudo",
         "chroot",
         work_dir,
         "/bin/bash",
@@ -741,12 +959,9 @@ def copy_packages_to_chroot(
 ):
     """
     Copia os pacotes para dentro do sistema extraído.
-
-    Returns:
-        Tupla contendo:
-            diretório físico dos pacotes
-            nomes dos pacotes
     """
+
+    require_root()
 
     package_dir = os.path.join(
         work_dir,
@@ -755,7 +970,6 @@ def copy_packages_to_chroot(
     )
 
     run([
-        "sudo",
         "mkdir",
         "-p",
         package_dir
@@ -773,7 +987,6 @@ def copy_packages_to_chroot(
         )
 
         run([
-            "sudo",
             "cp",
             package_path,
             package_dir
@@ -791,6 +1004,8 @@ def install_debian_packages(
     Instala arquivos .deb dentro de um sistema Debian/Ubuntu.
     """
 
+    require_root()
+
     report_progress(
         progress_callback,
         97,
@@ -803,7 +1018,6 @@ def install_debian_packages(
     ]
 
     result = run([
-        "sudo",
         "chroot",
         work_dir,
         "dpkg",
@@ -815,10 +1029,7 @@ def install_debian_packages(
         f"DEBUG código dpkg: {result.returncode}"
     )
 
-    # O dpkg pode retornar erro por dependências.
-    # apt-get -f resolve essas dependências.
     run([
-        "sudo",
         "chroot",
         work_dir,
         "apt-get",
@@ -837,6 +1048,8 @@ def install_arch_packages(
     Instala pacotes Arch dentro do sistema extraído.
     """
 
+    require_root()
+
     report_progress(
         progress_callback,
         97,
@@ -849,7 +1062,6 @@ def install_arch_packages(
     ]
 
     run([
-        "sudo",
         "chroot",
         work_dir,
         "pacman",
@@ -861,8 +1073,7 @@ def install_arch_packages(
 
 def remove_temporary_packages(work_dir):
     """
-    Remove os pacotes copiados temporariamente
-    para dentro do sistema Live.
+    Remove os pacotes temporários.
     """
 
     package_dir = os.path.join(
@@ -881,7 +1092,7 @@ def remove_temporary_packages(work_dir):
 
 
 # ==========================================================
-# Personalização do sistema Live
+# Personalização
 # ==========================================================
 
 def customize_live_system(
@@ -891,16 +1102,9 @@ def customize_live_system(
 ):
     """
     Extrai o SquashFS e personaliza o sistema Live.
-
-    O SquashFS não é reconstruído nesta função.
-
-    Returns:
-        Dicionário contendo:
-            distro
-            squashfs_path
-            squashfs_compression
-            work_dir
     """
+
+    require_root()
 
     iso_root = os.path.abspath(
         iso_root
@@ -923,8 +1127,10 @@ def customize_live_system(
         iso_root
     )
 
-    squashfs_compression = detect_squashfs_compression(
-        squashfs_path
+    squashfs_compression = (
+        detect_squashfs_compression(
+            squashfs_path
+        )
     )
 
     work_dir = os.path.join(
@@ -972,7 +1178,6 @@ def customize_live_system(
     )
 
     run([
-        "sudo",
         "unsquashfs",
         "-d",
         work_dir,
@@ -984,15 +1189,11 @@ def customize_live_system(
             f"Falha ao extrair SquashFS: {work_dir}"
         )
 
-    # ------------------------------------------------------
-    # Prepara chroot
-    # ------------------------------------------------------
-
     prepare_chroot(
         work_dir
     )
 
-    configure_dns(
+    dns_state = configure_dns(
         work_dir
     )
 
@@ -1009,10 +1210,6 @@ def customize_live_system(
             work_dir
         )
 
-        # --------------------------------------------------
-        # Testa chroot
-        # --------------------------------------------------
-
         report_progress(
             progress_callback,
             95,
@@ -1022,10 +1219,6 @@ def customize_live_system(
         test_chroot(
             work_dir
         )
-
-        # --------------------------------------------------
-        # Copia pacotes
-        # --------------------------------------------------
 
         package_dir, package_names = (
             copy_packages_to_chroot(
@@ -1037,10 +1230,6 @@ def customize_live_system(
         print(
             f"DEBUG diretório temporário: {package_dir}"
         )
-
-        # --------------------------------------------------
-        # Instala
-        # --------------------------------------------------
 
         if distro == "debian":
             install_debian_packages(
@@ -1061,6 +1250,22 @@ def customize_live_system(
                 f"Distribuição não suportada: {distro}"
             )
 
+        # ----------------------------------------------
+        # Limpeza de vestígios (locks, machine-id) e
+        # restauração do DNS ainda com os filesystems
+        # montados, antes de desmontar.
+        # ----------------------------------------------
+
+        cleanup_chroot_traces(
+            work_dir,
+            distro
+        )
+
+        restore_dns(
+            work_dir,
+            dns_state
+        )
+
     finally:
         report_progress(
             progress_callback,
@@ -1075,10 +1280,6 @@ def customize_live_system(
         print(
             "DEBUG ambiente chroot desmontado."
         )
-
-    # ------------------------------------------------------
-    # Remove pacotes temporários
-    # ------------------------------------------------------
 
     remove_temporary_packages(
         work_dir
@@ -1113,15 +1314,10 @@ def rebuild_squashfs(
     compression=None
 ):
     """
-    Reconstrói o SquashFS.
-
-    O novo SquashFS é criado primeiro em um arquivo temporário.
-    O original somente é substituído depois que o novo arquivo
-    foi criado e validado.
-
-    A compressão original pode ser informada para preservar a
-    estrutura da ISO. Se não for informada, usa xz.
+    Reconstrói o SquashFS preservando a compressão original.
     """
+
+    require_root()
 
     squashfs_path = os.path.abspath(
         squashfs_path
@@ -1137,9 +1333,30 @@ def rebuild_squashfs(
             f"{work_dir}"
         )
 
+    # ----------------------------------------------------------
+    # Rede de segurança: mesmo que unmount_chroot_filesystems()
+    # já garanta (e agora valide de fato) que dev/proc/sys/run
+    # foram desmontados, excluímos esses caminhos explicitamente
+    # do mksquashfs. Isso é redundante por design -- é barato e
+    # evita que um lapso nesse processo empacote arquivos do
+    # sistema hospedeiro dentro da ISO final.
+    # ----------------------------------------------------------
+
+    for sensitive_dir in ("dev", "proc", "sys", "run"):
+        full_path = os.path.join(work_dir, sensitive_dir)
+
+        if is_mounted(full_path):
+            raise RuntimeError(
+                f"{full_path} ainda está montado. Abortando a "
+                "reconstrução do SquashFS para não empacotar "
+                "arquivos do sistema hospedeiro dentro da ISO."
+            )
+
     compression = (
         compression
-        or detect_squashfs_compression(squashfs_path)
+        or detect_squashfs_compression(
+            squashfs_path
+        )
     )
 
     report_progress(
@@ -1170,13 +1387,18 @@ def rebuild_squashfs(
         )
 
         run([
-            "sudo",
             "mksquashfs",
             work_dir,
             temp_squashfs,
             "-comp",
             compression,
-            "-noappend"
+            "-noappend",
+            "-wildcards",
+            "-e",
+            "dev/*",
+            "proc/*",
+            "sys/*",
+            "run/*",
         ])
 
         if not os.path.isfile(
@@ -1200,19 +1422,11 @@ def rebuild_squashfs(
             f"{size / (1024 ** 2):.2f} MB"
         )
 
-        # --------------------------------------------------
-        # Validação rápida do novo SquashFS
-        # --------------------------------------------------
-
         run([
             "unsquashfs",
             "-s",
             temp_squashfs
         ])
-
-        # --------------------------------------------------
-        # Substitui somente depois da validação
-        # --------------------------------------------------
 
         print(
             f"DEBUG substituindo SquashFS original: "
@@ -1220,7 +1434,6 @@ def rebuild_squashfs(
         )
 
         run([
-            "sudo",
             "mv",
             temp_squashfs,
             squashfs_path
@@ -1244,7 +1457,7 @@ def rebuild_squashfs(
 
 
 # ==========================================================
-# Arquivos auxiliares do Arch ISO
+# Arquivos auxiliares do Arch
 # ==========================================================
 
 def update_arch_squashfs_checksum(
@@ -1252,10 +1465,7 @@ def update_arch_squashfs_checksum(
     squashfs_path
 ):
     """
-    Atualiza o arquivo airootfs.sha512 da ISO Arch.
-
-    Isso evita deixar o checksum apontando para o SquashFS
-    original depois que o sistema interno foi modificado.
+    Atualiza o SHA-512 do airootfs.sfs da ISO Arch.
     """
 
     relative_squashfs = os.path.relpath(
@@ -1295,8 +1505,6 @@ def update_arch_squashfs_checksum(
 
     digest = sha512.hexdigest()
 
-    # O formato tradicional do sha512sum usa:
-    # <hash>  <arquivo>
     with open(
         checksum_path,
         "w",
@@ -1316,15 +1524,7 @@ def update_arch_squashfs_checksum(
 
 def remove_arch_backup_files(iso_root):
     """
-    Remove arquivos .backup criados durante testes ou
-    personalizações anteriores.
-
-    Isso é importante porque um ISO reconstruído a partir
-    da árvore completa poderia acabar carregando esses
-    arquivos para dentro da imagem.
-
-    No fluxo Arch atual, o xorriso replay não copia a árvore
-    inteira, mas ainda assim mantemos a árvore limpa.
+    Remove backups antigos do airootfs.sfs.
     """
 
     candidates = [
@@ -1346,7 +1546,7 @@ def remove_arch_backup_files(iso_root):
 
 
 # ==========================================================
-# Detecção do Bootloader
+# Boot Debian / Ubuntu
 # ==========================================================
 
 def find_existing_file(
@@ -1354,7 +1554,7 @@ def find_existing_file(
     candidates
 ):
     """
-    Retorna o primeiro arquivo existente da lista.
+    Retorna o primeiro arquivo existente.
     """
 
     for candidate in candidates:
@@ -1371,12 +1571,7 @@ def find_existing_file(
 
 def detect_boot_config(iso_root):
     """
-    Detecta uma estrutura de boot comum.
-
-    Suporta estruturas baseadas em:
-
-        Syslinux / ISOLINUX
-        GRUB
+    Detecta estrutura de boot usada pelo fluxo Debian/Ubuntu.
     """
 
     iso_root = os.path.abspath(
@@ -1404,50 +1599,42 @@ def detect_boot_config(iso_root):
             "Imagem EFI não encontrada na ISO."
         )
 
-    # ======================================================
-    # Syslinux / ISOLINUX
-    # ======================================================
+    # --------------------------------------------------------
+    # syslinux/isolinux
+    #
+    # CORREÇÃO DE BUG: a versão anterior exigia que o arquivo
+    # de catálogo de boot (ex.: "isolinux/boot.cat") já
+    # existisse fisicamente na ISO extraída para reconhecer o
+    # bootloader. Só que esse caminho é apenas o DESTINO que o
+    # xorriso vai escrever com "-c" -- ele não precisa
+    # pré-existir. Isso causava falsos negativos ("Estrutura de
+    # boot não reconhecida") em ISOs Debian/Ubuntu válidas que
+    # não carregavam um boot.cat físico. Agora a imagem de boot
+    # e o catálogo são pareados pelo mesmo diretório, e só a
+    # imagem de boot precisa existir de fato.
+    # --------------------------------------------------------
 
-    syslinux_boot_candidates = [
-        "isolinux/isolinux.bin",
-        "boot/isolinux/isolinux.bin",
-        "boot/syslinux/isolinux.bin",
-        "syslinux/isolinux.bin",
+    syslinux_pairs = [
+        ("isolinux/isolinux.bin", "isolinux/boot.cat"),
+        ("boot/isolinux/isolinux.bin", "boot/isolinux/boot.cat"),
+        ("boot/syslinux/isolinux.bin", "boot/syslinux/boot.cat"),
+        ("syslinux/isolinux.bin", "syslinux/boot.cat"),
     ]
 
-    syslinux_catalog_candidates = [
-        "isolinux/boot.cat",
-        "boot/isolinux/boot.cat",
-        "boot/syslinux/boot.cat",
-        "syslinux/boot.cat",
-    ]
+    for boot_candidate, catalog_candidate in syslinux_pairs:
+        boot_path = os.path.join(iso_root, boot_candidate)
 
-    boot_image = find_existing_file(
-        iso_root,
-        syslinux_boot_candidates
-    )
-
-    if boot_image is not None:
-        boot_catalog = find_existing_file(
-            iso_root,
-            syslinux_catalog_candidates
-        )
-
-        if boot_catalog is not None:
+        if os.path.isfile(boot_path):
             print(
                 "DEBUG bootloader: ISOLINUX/SYSLINUX"
             )
 
             return {
                 "type": "syslinux",
-                "boot_image": boot_image,
-                "boot_catalog": boot_catalog,
+                "boot_image": boot_candidate,
+                "boot_catalog": catalog_candidate,
                 "efi_image": efi_image,
             }
-
-    # ======================================================
-    # GRUB
-    # ======================================================
 
     grub_boot_candidates = [
         "boot/grub/i386-pc/eltorito.img",
@@ -1472,13 +1659,12 @@ def detect_boot_config(iso_root):
         }
 
     raise RuntimeError(
-        "Estrutura de boot não reconhecida. "
-        "Não foi encontrado um bootloader compatível."
+        "Estrutura de boot não reconhecida."
     )
 
 
 # ==========================================================
-# Criação da ISO - Debian / Ubuntu
+# Criação ISO Debian / Ubuntu
 # ==========================================================
 
 def create_debian_bootable_iso(
@@ -1487,11 +1673,10 @@ def create_debian_bootable_iso(
     progress_callback=None
 ):
     """
-    Cria a ISO Debian/Ubuntu usando o fluxo tradicional
-    xorriso -as mkisofs.
-
-    ESTA PARTE MANTÉM O FLUXO ORIGINAL DO PROJETO.
+    Mantém o fluxo tradicional Debian/Ubuntu.
     """
+
+    require_root()
 
     iso_root = os.path.abspath(
         iso_root
@@ -1515,26 +1700,6 @@ def create_debian_bootable_iso(
 
     boot_config = detect_boot_config(
         iso_root
-    )
-
-    print(
-        f"DEBUG tipo de boot: "
-        f"{boot_config['type']}"
-    )
-
-    print(
-        f"DEBUG boot image: "
-        f"{boot_config['boot_image']}"
-    )
-
-    print(
-        f"DEBUG boot catalog: "
-        f"{boot_config['boot_catalog']}"
-    )
-
-    print(
-        f"DEBUG EFI image: "
-        f"{boot_config['efi_image']}"
     )
 
     boot_image_path = os.path.join(
@@ -1579,16 +1744,13 @@ def create_debian_bootable_iso(
 
     try:
         if os.path.exists(final_iso):
-            remove_path(
-                final_iso
-            )
+            remove_path(final_iso)
 
         command = [
             "xorriso",
             "-as",
             "mkisofs",
 
-            # ISO filesystem
             "-r",
             "-V",
             "CustomLinux",
@@ -1597,11 +1759,9 @@ def create_debian_bootable_iso(
             "-iso-level",
             "3",
 
-            # MBR híbrido
             "-isohybrid-mbr",
             isohdpfx,
 
-            # BIOS / El Torito
             "-c",
             boot_config["boot_catalog"],
 
@@ -1613,60 +1773,40 @@ def create_debian_bootable_iso(
             "4",
             "-boot-info-table",
 
-            # UEFI
             "-eltorito-alt-boot",
             "-e",
             boot_config["efi_image"],
             "-no-emul-boot",
 
-            # GPT híbrido
             "-isohybrid-gpt-basdat",
 
-            # Saída
             "-o",
             temp_iso,
 
-            # Conteúdo
             iso_root,
         ]
 
-        print()
         print(
             "DEBUG comando xorriso Debian/Ubuntu:"
         )
 
         print(
-            " ".join(
-                f'"{arg}"' if " " in arg else arg
-                for arg in command
-            )
+            " ".join(command)
         )
-
-        print()
 
         run(command)
 
-        if not os.path.isfile(
-            temp_iso
-        ):
+        if not os.path.isfile(temp_iso):
             raise RuntimeError(
-                "O xorriso terminou, "
-                "mas a ISO não foi criada."
+                "O xorriso terminou, mas a ISO não foi criada."
             )
 
-        iso_size = os.path.getsize(
-            temp_iso
-        )
+        iso_size = os.path.getsize(temp_iso)
 
         if iso_size <= 0:
             raise RuntimeError(
                 "A ISO criada está vazia."
             )
-
-        print(
-            f"DEBUG ISO temporária criada: "
-            f"{temp_iso}"
-        )
 
         print(
             f"DEBUG tamanho da ISO: "
@@ -1685,8 +1825,7 @@ def create_debian_bootable_iso(
         )
 
     print(
-        f"ISO criada com sucesso: "
-        f"{final_iso}"
+        f"ISO criada com sucesso: {final_iso}"
     )
 
     report_progress(
@@ -1699,7 +1838,7 @@ def create_debian_bootable_iso(
 
 
 # ==========================================================
-# Criação da ISO - Arch Linux
+# Criação ISO Arch
 # ==========================================================
 
 def create_arch_bootable_iso(
@@ -1710,42 +1849,17 @@ def create_arch_bootable_iso(
     progress_callback=None
 ):
     """
-    Cria uma ISO Arch Linux preservando o boot original.
+    Cria uma ISO Arch preservando integralmente o boot
+    da ISO original através do xorriso replay.
 
-    IMPORTANTE:
-
-    Não usamos:
-
-        xorriso -as mkisofs
-        -isohybrid-mbr
-        -isohybrid-gpt-basdat
-        -e EFI/BOOT/BOOTX64.EFI
-
-    para a ISO Arch atual.
-
-    A ISO Arch detectada no projeto possui:
-
-        MBR híbrido
-        GPT híbrido
-        El Torito BIOS
-        El Torito UEFI
-        imagem EFI escondida / anexada
-
-    Portanto reconstruir o boot manualmente pode produzir uma
-    ISO que contém os arquivos, mas não inicializa corretamente.
-
-    Em vez disso usamos o recurso "replay" do xorriso:
-
-        -indev original.iso
-        -outdev nova.iso
-        -map novo_sfs /arch/x86_64/airootfs.sfs
-        -boot_image any replay
-        -commit
-        -end
-
-    Assim o xorriso reaproveita a estrutura de boot da ISO
-    original e troca somente os arquivos que modificamos.
+    NÃO reconstrói manualmente:
+        MBR
+        GPT
+        El Torito
+        EFI
     """
+
+    require_root()
 
     original_iso = os.path.abspath(
         original_iso
@@ -1811,46 +1925,28 @@ def create_arch_bootable_iso(
 
     try:
         if os.path.exists(final_iso):
-            remove_path(
-                final_iso
-            )
-
-        # --------------------------------------------------
-        # O arquivo checksum também foi modificado.
-        # --------------------------------------------------
-
-        map_checksum = os.path.isfile(
-            checksum_path
-        )
+            remove_path(final_iso)
 
         command = [
             "xorriso",
 
-            # ISO original
             "-indev",
             original_iso,
 
-            # ISO nova
             "-outdev",
             temp_iso,
 
-            # Substitui o SquashFS original pelo novo.
             "-map",
             squashfs_path,
             squashfs_iso_path,
         ]
 
-        if map_checksum:
+        if os.path.isfile(checksum_path):
             command.extend([
                 "-map",
                 checksum_path,
                 "/arch/x86_64/airootfs.sha512",
             ])
-
-        # --------------------------------------------------
-        # Reaproveita exatamente as informações de boot
-        # da ISO original.
-        # --------------------------------------------------
 
         command.extend([
             "-boot_image",
@@ -1861,33 +1957,22 @@ def create_arch_bootable_iso(
             "-end",
         ])
 
-        print()
         print(
             "DEBUG comando xorriso Arch:"
         )
 
         print(
-            " ".join(
-                f'"{arg}"' if " " in arg else arg
-                for arg in command
-            )
+            " ".join(command)
         )
-
-        print()
 
         run(command)
 
-        if not os.path.isfile(
-            temp_iso
-        ):
+        if not os.path.isfile(temp_iso):
             raise RuntimeError(
-                "O xorriso terminou, "
-                "mas a ISO Arch não foi criada."
+                "O xorriso terminou, mas a ISO Arch não foi criada."
             )
 
-        iso_size = os.path.getsize(
-            temp_iso
-        )
+        iso_size = os.path.getsize(temp_iso)
 
         if iso_size <= 0:
             raise RuntimeError(
@@ -1895,20 +1980,12 @@ def create_arch_bootable_iso(
             )
 
         print(
-            f"DEBUG ISO Arch temporária criada: "
-            f"{temp_iso}"
-        )
-
-        print(
             f"DEBUG tamanho da ISO Arch: "
             f"{iso_size / (1024 ** 3):.2f} GB"
         )
 
         # --------------------------------------------------
-        # Validação da estrutura de boot.
-        #
-        # Não reconstruímos o boot; apenas verificamos que
-        # o resultado ainda contém as informações El Torito.
+        # Validação do boot
         # --------------------------------------------------
 
         report_progress(
@@ -1940,6 +2017,7 @@ def create_arch_bootable_iso(
         print(
             "DEBUG validação El Torito/System Area:"
         )
+
         print(
             validation_output
         )
@@ -1962,10 +2040,6 @@ def create_arch_bootable_iso(
                 "uma entrada UEFI no El Torito."
             )
 
-        # --------------------------------------------------
-        # Move para o destino final.
-        # --------------------------------------------------
-
         shutil.move(
             temp_iso,
             final_iso
@@ -1978,8 +2052,7 @@ def create_arch_bootable_iso(
         )
 
     print(
-        f"ISO Arch criada com sucesso: "
-        f"{final_iso}"
+        f"ISO Arch criada com sucesso: {final_iso}"
     )
 
     report_progress(
@@ -1991,6 +2064,10 @@ def create_arch_bootable_iso(
     return final_iso
 
 
+# ==========================================================
+# Seleção do método
+# ==========================================================
+
 def create_bootable_iso(
     iso_root,
     output_dir,
@@ -2000,14 +2077,7 @@ def create_bootable_iso(
     squashfs_path=None
 ):
     """
-    Seleciona automaticamente o método correto de criação
-    da ISO.
-
-    Debian/Ubuntu:
-        mantém o fluxo tradicional mkisofs.
-
-    Arch:
-        usa xorriso replay para preservar MBR/GPT/El Torito/EFI.
+    Seleciona o método correto de criação da ISO.
     """
 
     if distro == "arch":
@@ -2019,8 +2089,7 @@ def create_bootable_iso(
 
         if not squashfs_path:
             raise RuntimeError(
-                "O caminho do SquashFS é obrigatório "
-                "para criar a ISO Arch."
+                "O caminho do SquashFS é obrigatório."
             )
 
         return create_arch_bootable_iso(
@@ -2045,12 +2114,14 @@ def create_bootable_iso(
 
 
 # ==========================================================
-# Limpeza do diretório de trabalho
+# Limpeza
 # ==========================================================
 
 def clean_output_directory(out_dir):
     """
     Remove todo o conteúdo anterior do diretório de trabalho.
+
+    NÃO usa sudo.
     """
 
     if not os.path.isdir(out_dir):
@@ -2082,41 +2153,21 @@ def build_iso(
     """
     Executa o processo completo de criação da ISO.
 
-    Fluxo:
+    O processo inteiro deve ser iniciado como root.
 
-        ISO original
-            ↓
-        Extração
-            ↓
-        Detecção do SquashFS
-            ↓
-        Detecção da distribuição
-            ↓
-        Extração do sistema
-            ↓
-        Chroot
-            ↓
-        Instalação dos pacotes
-            ↓
-        Desmontagem
-            ↓
-        Reconstrução do SquashFS
-            ↓
-        Debian/Ubuntu:
-            reconstrução tradicional
-        Arch:
-            replay do boot original
-            ↓
-        ISO final
+    Arch:
+        mantém o boot original através de xorriso replay.
 
-    IMPORTANTE:
-
-    O fluxo Debian/Ubuntu continua usando o método anterior.
-
-    A diferença principal está no Arch Linux: em vez de tentar
-    reconstruir manualmente MBR/GPT/EFI com mkisofs, preservamos
-    a estrutura de boot da ISO original através do xorriso replay.
+    Debian/Ubuntu:
+        mantém o fluxo tradicional mkisofs.
     """
+
+    # ------------------------------------------------------
+    # PRIMEIRA COISA:
+    # verifica root antes de fazer qualquer trabalho.
+    # ------------------------------------------------------
+
+    require_root()
 
     iso_path = os.path.abspath(
         iso_path
@@ -2126,33 +2177,18 @@ def build_iso(
         out_dir
     )
 
-    # ------------------------------------------------------
-    # Valida ISO
-    # ------------------------------------------------------
-
-    if not os.path.isfile(
-        iso_path
-    ):
+    if not os.path.isfile(iso_path):
         raise RuntimeError(
             f"ISO não encontrada: {iso_path}"
         )
 
-    # O diretório de saída não pode ser a própria ISO.
     if os.path.isfile(out_dir):
         raise RuntimeError(
             "O caminho de saída informado é um arquivo, "
             "não um diretório."
         )
 
-    # ------------------------------------------------------
-    # Dependências
-    # ------------------------------------------------------
-
     validate_dependencies()
-
-    # ------------------------------------------------------
-    # Prepara diretório
-    # ------------------------------------------------------
 
     ensure_directory(
         out_dir
@@ -2164,6 +2200,34 @@ def build_iso(
         "Preparando processo..."
     )
 
+    # ------------------------------------------------------
+    # CORREÇÃO DE BUG: clean_output_directory() logo abaixo
+    # apaga TUDO dentro de out_dir. Se a ISO de entrada estiver
+    # dentro do próprio out_dir (ex.: usuário aponta o mesmo
+    # diretório para entrada e saída), a ISO original seria
+    # apagada antes de ser extraída. Copiamos para um diretório
+    # temporário seguro nesse caso.
+    # ------------------------------------------------------
+
+    temp_input_dir = None
+
+    if iso_path == out_dir or iso_path.startswith(out_dir + os.sep):
+        temp_input_dir = tempfile.mkdtemp(prefix="iso-input-")
+
+        safe_iso_path = os.path.join(
+            temp_input_dir,
+            os.path.basename(iso_path)
+        )
+
+        shutil.copy2(iso_path, safe_iso_path)
+
+        print(
+            "WARNING: a ISO de entrada estava dentro do diretório "
+            f"de saída. Copiada temporariamente para: {safe_iso_path}"
+        )
+
+        iso_path = safe_iso_path
+
     print(
         f"DEBUG ISO original: {iso_path}"
     )
@@ -2172,16 +2236,12 @@ def build_iso(
         f"DEBUG diretório de trabalho: {out_dir}"
     )
 
-    # ------------------------------------------------------
-    # Limpa saída anterior
-    # ------------------------------------------------------
-
     clean_output_directory(
         out_dir
     )
 
     # ------------------------------------------------------
-    # Extrai ISO
+    # Extração da ISO
     # ------------------------------------------------------
 
     report_progress(
@@ -2190,17 +2250,44 @@ def build_iso(
         "Extraindo ISO..."
     )
 
-    extract_with_7z(
-        iso_path,
-        out_dir
-    )
+    try:
+        extract_iso(
+            iso_path,
+            out_dir
+        )
 
-    print(
-        "DEBUG ISO extraída com 7z."
-    )
+        print(
+            "DEBUG ISO extraída com xorriso (osirrox)."
+        )
+
+    except Exception as exc:
+        print(
+            f"WARNING: falha ao extrair com xorriso ({exc}); "
+            "tentando 7z como alternativa..."
+        )
+
+        clean_output_directory(
+            out_dir
+        )
+
+        extract_with_7z(
+            iso_path,
+            out_dir
+        )
+
+        print(
+            "DEBUG ISO extraída com 7z (fallback)."
+        )
+
+    finally:
+        if temp_input_dir:
+            shutil.rmtree(
+                temp_input_dir,
+                ignore_errors=True
+            )
 
     # ------------------------------------------------------
-    # Detecta distribuição ANTES da personalização.
+    # Detecção da distribuição
     # ------------------------------------------------------
 
     distro = detect_distro(
@@ -2233,7 +2320,7 @@ def build_iso(
         )
 
         # --------------------------------------------------
-        # Arch: atualiza SHA-512 depois de recriar o SFS.
+        # Arch: atualiza checksum
         # --------------------------------------------------
 
         if distro == "arch":
@@ -2247,8 +2334,7 @@ def build_iso(
             )
 
         # --------------------------------------------------
-        # O diretório squashfs-root não pertence ao conteúdo
-        # final da ISO.
+        # Remove squashfs-root
         # --------------------------------------------------
 
         if os.path.exists(
@@ -2259,8 +2345,6 @@ def build_iso(
             )
 
     else:
-        # Mesmo sem personalização, a árvore extraída pode
-        # conter arquivos de testes antigos.
         if distro == "arch":
             remove_arch_backup_files(
                 out_dir
@@ -2271,10 +2355,6 @@ def build_iso(
     # ------------------------------------------------------
 
     if distro == "arch":
-        # --------------------------------------------------
-        # Se não houve personalização, não precisamos
-        # reconstruir nada: basta copiar a ISO original.
-        # --------------------------------------------------
 
         if result is None:
             report_progress(
