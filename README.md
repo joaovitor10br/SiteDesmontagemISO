@@ -2,38 +2,45 @@
 
 Ferramenta web local para extração, modificação e reconstrução de imagens ISO Linux de forma simples e visual.
 
-O projeto permite gerar ISOs personalizadas adicionando pacotes .deb automaticamente e recriando a imagem bootável (BIOS + UEFI).
+O projeto permite gerar ISOs personalizadas adicionando pacotes automaticamente (.deb ou pacotes Arch) e recriando a imagem bootável (BIOS + UEFI), preservando a estrutura de boot original.
+
+Suporta tanto distribuições baseadas em **Debian/Ubuntu** (Ubuntu, Linux Mint, Debian, etc.) quanto **Arch Linux**.
 
 ✨ Demonstração
 
 Interface web para gerar uma ISO personalizada:
 
 Upload da ISO original
-Inclusão de pacotes .deb
+Inclusão de pacotes (.deb para Debian/Ubuntu, pacotes Arch para Arch Linux)
 Barra de progresso em tempo real
 Geração automática de ISO bootável
+
 🚀 Funcionalidades
 
-✔ Extração automática da ISO Linux
-✔ Montagem via loop + rsync
+✔ Extração automática da ISO Linux via xorriso (com fallback para 7z)
+✔ Detecção automática da distribuição (Debian/Ubuntu ou Arch) a partir da estrutura do SquashFS
 ✔ Customização do sistema via chroot
-✔ Instalação automática de pacotes .deb
-✔ Reconstrução do SquashFS
-✔ Geração de ISO bootável (BIOS + UEFI) com xorriso
+✔ Instalação automática de pacotes (.deb via dpkg/apt, ou pacotes Arch via pacman)
+✔ Reconstrução do SquashFS preservando a compressão original
+✔ Geração de ISO bootável (BIOS + UEFI):
+&nbsp;&nbsp;&nbsp;&nbsp;• Debian/Ubuntu: remontagem completa via xorriso -as mkisofs
+&nbsp;&nbsp;&nbsp;&nbsp;• Arch: preservação do boot original via xorriso replay, sem reconstrução manual de MBR/GPT/El Torito/EFI
 ✔ Detecção automática do isohdpfx (Syslinux)
+✔ Verificação segura de desmontagem do chroot (evita empacotar arquivos do sistema hospedeiro na ISO final)
+✔ Limpeza de vestígios do host: reset de machine-id, remoção de locks residuais (dpkg/pacman) e restauração do DNS original do sistema Live
 ✔ Interface web com barra de progresso em tempo real
 
 🧠 Como funciona
 
 Pipeline simplificado:
 
-Upload da ISO original
-Extração do conteúdo da ISO
-Montagem do filesystem Linux (SquashFS)
-Entrada em chroot para customização
-Instalação de pacotes adicionais
-Reconstrução do SquashFS
-Recriação da ISO bootável
+1. Upload da ISO original
+2. Extração do conteúdo da ISO (xorriso)
+3. Detecção da distribuição (Debian/Ubuntu ou Arch) e do SquashFS
+4. Extração do SquashFS e entrada em chroot para customização
+5. Instalação de pacotes adicionais (opcional)
+6. Reconstrução do SquashFS
+7. Recriação da ISO bootável, preservando o boot original
 
 Resultado → uma ISO Linux customizada pronta para instalar ou rodar em VM
 
@@ -43,8 +50,9 @@ Backend
 
 Python 3
 Flask
-SquashFS tools
+SquashFS tools (mksquashfs / unsquashfs)
 xorriso
+7z (fallback de extração)
 rsync
 chroot
 
@@ -53,44 +61,68 @@ Frontend
 HTML5
 CSS3
 JavaScript (Fetch API)
+
 📋 Requisitos
 
 Sistema operacional: Linux
 
 Dependências do sistema:
 
-sudo apt install squashfs-tools xorriso rsync syslinux-utils
+```
+sudo apt install squashfs-tools xorriso rsync syslinux-utils p7zip-full
+```
 
 Dependências Python:
 
 Python 3.10+
 pip
+
 ⚙️ Instalação
 
 Clone o repositório:
 
+```
 git clone https://github.com/joaovitor10br/SiteDesmontagemISO.git
 cd SiteDesmontagemISO
+```
 
 Crie o ambiente virtual:
 
+```
 cd backend
 python -m venv venv
 source venv/bin/activate
+```
 
 Instale as dependências:
 
+```
 pip install -r requirements.txt
+```
+
 ▶️ Executando o projeto
-python app.py
+
+O processo de criação de ISO precisa de permissões de root (manipula chroot e bind mounts), então o backend deve ser iniciado com sudo:
+
+```
+sudo ./venv/bin/python app.py
+```
 
 Abra no navegador:
 
+```
 http://127.0.0.1:5000
+```
+
 🧪 Testado com
+
 Debian Netinst ISO
+Linux Mint 22.3 Xfce (64-bit)
 VirtualBox
+
 📦 Estrutura do projeto
+
+```
 backend/
  ├── app.py
  ├── iso_linux.py
@@ -100,18 +132,24 @@ frontend/
  ├── index.html
  ├── sobre.html
  └── style.css
+```
+
 ⚠️ Observações importantes
-O projeto precisa rodar com permissões de sudo para manipular ISOs.
-Pode consumir bastante CPU/RAM durante a reconstrução da ISO.
+
+O projeto precisa rodar com permissões de root (via sudo) para manipular ISOs, montar filesystems e usar chroot.
+Pode consumir bastante CPU/RAM/disco durante a extração e reconstrução da ISO (a ISO original é totalmente extraída em disco antes de ser remontada).
 Ideal usar SSD para melhor desempenho.
+Não use o mesmo diretório para armazenar a ISO de entrada e o diretório de saída/trabalho.
+
 🎯 Objetivo do projeto
 
-Este projeto foi desenvolvido com fins acadêmicos para demonstrar:
+Este projeto foi desenvolvido com fins acadêmicos (Trabalho de Conclusão de Curso) para demonstrar:
 
-Manipulação de imagens Linux
-Automação de sistemas
+Manipulação de imagens Linux (ISO9660, El Torito, SquashFS)
+Automação de sistemas via chroot
 Integração backend + frontend
-Processos de build de distribuições Linux
+Processos de build de distribuições Linux (Debian/Ubuntu e Arch)
+
 👨‍💻 Autor
 
 João Vitor Alves Martins
