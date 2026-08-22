@@ -15,11 +15,18 @@ Inclusão de pacotes (.deb para Debian/Ubuntu, pacotes Arch para Arch Linux)
 Barra de progresso em tempo real
 Geração automática de ISO bootável
 
+**Prova de funcionamento — pacote injetado, ISO gerada, boot confirmado:**
+
+| Debian/Ubuntu (Linux Mint) | Arch Linux |
+|---|---|
+| ![Google Chrome pré-instalado no Linux Mint, rodando dentro da ISO customizada no VirtualBox](screenshots/screenshot-mint-chrome.png) | ![htop rodando dentro da ISO Arch customizada no VirtualBox](screenshots/screenshot-arch-htop.png) |
+| Google Chrome injetado via `.deb` e já pré-instalado no boot da ISO gerada. O navegador nunca vem por padrão em nenhuma distro — a presença dele comprova que o pipeline de customização funcionou. | `htop` injetado via pacote Arch (`.pkg.tar.zst`) rodando normalmente após o boot, confirmando que a instalação via `pacman` dentro do chroot e a reconstrução da ISO preservaram um sistema íntegro e funcional. |
+
 🚀 Funcionalidades
 
 ✔ Extração automática da ISO Linux via xorriso (com fallback para 7z)
 ✔ Detecção automática da distribuição (Debian/Ubuntu ou Arch) a partir da estrutura do SquashFS
-✔ Customização do sistema via chroot
+✔ Customização do sistema via chroot, com o diretório de trabalho montado como ponto de montagem próprio (bind mount), evitando falhas de detecção de espaço em disco pelo pacman
 ✔ Instalação automática de pacotes (.deb via dpkg/apt, ou pacotes Arch via pacman)
 ✔ Reconstrução do SquashFS preservando a compressão original
 ✔ Geração de ISO bootável (BIOS + UEFI):
@@ -117,8 +124,9 @@ http://127.0.0.1:5000
 🧪 Testado com
 
 Debian Netinst ISO
-Linux Mint 22.3 Xfce (64-bit)
-VirtualBox
+Linux Mint 22.3 Xfce (64-bit) — testado com injeção de pacote `.deb` (Google Chrome), boot validado no VirtualBox
+Arch Linux (ISO oficial 2026.08.01) — testado com injeção de pacote Arch (htop), boot validado no VirtualBox
+VirtualBox / QEMU (BIOS e UEFI)
 
 📦 Estrutura do projeto
 
@@ -132,6 +140,10 @@ frontend/
  ├── index.html
  ├── sobre.html
  └── style.css
+
+screenshots/
+ ├── screenshot-mint-chrome.png
+ └── screenshot-arch-htop.png
 ```
 
 ⚠️ Observações importantes

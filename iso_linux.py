@@ -738,6 +738,48 @@ def cleanup_chroot_traces(work_dir, distro):
             remove_path(lock_path)
 
 
+def ensure_mtab_symlink(work_dir):
+    """
+    Garante que /etc/mtab dentro do chroot seja um symlink para
+    /proc/self/mounts.
+
+    Necessário para o pacman conseguir calcular espaço em disco
+    corretamente dentro de um chroot montado manualmente (ver
+    comentário em mount_chroot_filesystems). Só faz sentido ser
+    chamado DEPOIS que /proc já estiver montado dentro do
+    work_dir.
+    """
+
+    require_root()
+
+    mtab_path = os.path.join(work_dir, "etc", "mtab")
+
+    try:
+        if os.path.islink(mtab_path):
+            current_target = os.readlink(mtab_path)
+
+            if current_target in ("/proc/self/mounts", "../proc/self/mounts"):
+                return
+
+        if os.path.lexists(mtab_path):
+            remove_path(mtab_path)
+
+        os.symlink(
+            "/proc/self/mounts",
+            mtab_path
+        )
+
+        print(
+            "DEBUG /etc/mtab apontado para /proc/self/mounts."
+        )
+
+    except OSError as exc:
+        print(
+            f"WARNING: não foi possível criar symlink de "
+            f"/etc/mtab: {exc}"
+        )
+
+
 def mount_chroot_filesystems(work_dir):
     """
     Monta os pseudo-filesystems necessários para o chroot.
@@ -755,6 +797,47 @@ def mount_chroot_filesystems(work_dir):
     mounted = []
 
     try:
+        # --------------------------------------------------
+        # Auto-bind do próprio work_dir
+        #
+        # CORREÇÃO DE BUG (Arch): um "chroot" comum não faz o
+        # diretório de destino virar um ponto de montagem de
+        # verdade -- ele continua sendo só uma pasta normal no
+        # disco. O pacman, para calcular espaço livre, precisa
+        # encontrar em /proc/self/mounts uma entrada cujo alvo
+        # bata exatamente com o "/" visto de dentro do chroot.
+        # Como essa pasta nunca foi montada como um filesystem
+        # próprio, ele não encontra nada, e falha com:
+        #   "error: could not determine root mount point /"
+        #   "error: not enough free disk space"
+        # (mesmo havendo espaço de sobra).
+        #
+        # Isso é resolvido montando o próprio work_dir "sobre
+        # si mesmo" (bind mount), o que o transforma num ponto
+        # de montagem de verdade -- é exatamente o que a
+        # ferramenta oficial "arch-chroot" faz por baixo dos
+        # panos. Como "arch-chroot" não está necessariamente
+        # disponível no sistema hospedeiro (que pode nem ser
+        # Arch), replicamos o comportamento manualmente aqui.
+        # --------------------------------------------------
+
+        run([
+            "mount",
+            "--bind",
+            work_dir,
+            work_dir
+        ])
+
+        run([
+            "mount",
+            "--make-private",
+            work_dir
+        ])
+
+        mounted.append(
+            ("normal", work_dir)
+        )
+
         # --------------------------------------------------
         # /dev
         # --------------------------------------------------
@@ -791,6 +874,25 @@ def mount_chroot_filesystems(work_dir):
         mounted.append(
             ("normal", proc_dir)
         )
+
+        # --------------------------------------------------
+        # /etc/mtab -> /proc/self/mounts
+        #
+        # CORREÇÃO DE BUG (Arch): o pacman calcula espaço livre
+        # em disco lendo /etc/mtab para descobrir em qual mount
+        # point cada diretório está. Esse arquivo normalmente é
+        # um symlink para /proc/self/mounts criado pelo systemd
+        # durante o boot -- só que dentro de um chroot montado
+        # manualmente (sem boot real) esse symlink nunca é
+        # criado. Sem ele, o pacman erra com:
+        #   "error: could not determine root mount point /"
+        #   "error: not enough free disk space"
+        # mesmo havendo espaço de sobra. É um problema clássico
+        # e documentado de chroot Arch -- o próprio archiso cria
+        # esse symlink manualmente antes de instalar pacotes.
+        # --------------------------------------------------
+
+        ensure_mtab_symlink(work_dir)
 
         # --------------------------------------------------
         # /sys
