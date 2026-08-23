@@ -17,10 +17,10 @@ Geração automática de ISO bootável
 
 **Prova de funcionamento — pacote injetado, ISO gerada, boot confirmado:**
 
-| Debian/Ubuntu (Linux Mint) | Arch Linux |
-|---|---|
-| ![Google Chrome pré-instalado no Linux Mint, rodando dentro da ISO customizada no VirtualBox](screenshots/screenshot-mint-chrome.png) | ![htop rodando dentro da ISO Arch customizada no VirtualBox](screenshots/screenshot-arch-htop.png) |
-| Google Chrome injetado via `.deb` e já pré-instalado no boot da ISO gerada. O navegador nunca vem por padrão em nenhuma distro — a presença dele comprova que o pipeline de customização funcionou. | `htop` injetado via pacote Arch (`.pkg.tar.zst`) rodando normalmente após o boot, confirmando que a instalação via `pacman` dentro do chroot e a reconstrução da ISO preservaram um sistema íntegro e funcional. |
+| Debian/Ubuntu (Linux Mint) | Debian (Live GNOME) | Arch Linux |
+|---|---|---|
+| ![Google Chrome pré-instalado no Linux Mint, rodando dentro da ISO customizada no VirtualBox](screenshots/screenshot-mint-chrome.png) | ![Google Chrome pré-instalado no Debian Live GNOME, rodando dentro da ISO customizada no VirtualBox](screenshots/screenshot-debian-chrome.png) | ![htop rodando dentro da ISO Arch customizada no VirtualBox](screenshots/screenshot-arch-htop.png) |
+| Google Chrome injetado via `.deb` e já pré-instalado no boot da ISO gerada. O navegador nunca vem por padrão em nenhuma distro — a presença dele comprova que o pipeline de customização funcionou. | Mesmo teste do Chrome, agora na distro de origem: Debian puro com ambiente GNOME, validando que o pipeline funciona na base Debian "pura", não só em derivadas como Ubuntu/Mint. | `htop` injetado via pacote Arch (`.pkg.tar.zst`) rodando normalmente após o boot, confirmando que a instalação via `pacman` dentro do chroot e a reconstrução da ISO preservaram um sistema íntegro e funcional. |
 
 🚀 Funcionalidades
 
@@ -147,6 +147,7 @@ frontend/
 
 screenshots/
  ├── screenshot-mint-chrome.png
+ ├── screenshot-debian-chrome.png
  └── screenshot-arch-htop.png
 ```
 
