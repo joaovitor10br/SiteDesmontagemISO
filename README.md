@@ -76,8 +76,10 @@ Sistema operacional: Linux
 Dependências do sistema:
 
 ```
-sudo apt install squashfs-tools xorriso rsync syslinux-utils p7zip-full
+sudo apt install squashfs-tools xorriso rsync syslinux-utils isolinux p7zip-full
 ```
+
+> ⚠️ **Atenção:** o pacote `syslinux` sozinho **não** inclui o `isohdpfx.bin` (necessário para gerar ISOs híbridas BIOS/MBR). Esse arquivo vem no pacote separado `isolinux`. Se aparecer o erro `isohdpfx.bin não encontrado. Instale o pacote syslinux.` mesmo já tendo o `syslinux` instalado, rode `sudo apt install isolinux` separadamente.
 
 Dependências Python:
 
@@ -123,10 +125,12 @@ http://127.0.0.1:5000
 
 🧪 Testado com
 
-Debian Netinst ISO
-Linux Mint 22.3 Xfce (64-bit) — testado com injeção de pacote `.deb` (Google Chrome), boot validado no VirtualBox
+Linux Mint 22.3 Xfce/Cinnamon (64-bit) — testado com injeção de pacote `.deb` (Google Chrome), boot validado no VirtualBox
+Debian Live GNOME (64-bit) — testado com injeção de pacote `.deb` (Google Chrome), boot validado no VirtualBox
 Arch Linux (ISO oficial 2026.08.01) — testado com injeção de pacote Arch (htop), boot validado no VirtualBox
 VirtualBox / QEMU (BIOS e UEFI)
+
+> ⚠️ Use a variante **Debian Live** (`debian-live-*-amd64-<ambiente>.iso`, disponível em [cdimage.debian.org](https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid/)), não a **netinst**/DVD de instalação — essa última é só o instalador (`debian-installer`) e não contém o `live/filesystem.squashfs` que o projeto espera encontrar.
 
 📦 Estrutura do projeto
 
