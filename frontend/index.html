@@ -3,48 +3,82 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ISO Builder — Gerador de ISO Linux</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
 <link rel="stylesheet" href="style.css">
-<title>ISO Builder</title>
+
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='2' y='2' width='28' height='28' fill='%23EEF3FB' stroke='%231D4ED8' stroke-width='2'/%3E%3Crect x='9' y='9' width='14' height='14' fill='none' stroke='%231D4ED8' stroke-width='2'/%3E%3C/svg%3E">
 </head>
 
 <body>
 
 <header>
-    <div class="logo">ISO Builder</div>
+    <div class="brand">
+        <svg class="brand-mark" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <rect x="2" y="2" width="28" height="28" stroke="#1D4ED8" stroke-width="2"/>
+            <rect x="9" y="9" width="14" height="14" stroke="#1D4ED8" stroke-width="2"/>
+            <line x1="2" y1="9" x2="9" y2="9" stroke="#1D4ED8" stroke-width="1.5"/>
+            <line x1="23" y1="9" x2="30" y2="9" stroke="#1D4ED8" stroke-width="1.5"/>
+            <line x1="2" y1="23" x2="9" y2="23" stroke="#1D4ED8" stroke-width="1.5"/>
+            <line x1="23" y1="23" x2="30" y2="23" stroke="#1D4ED8" stroke-width="1.5"/>
+        </svg>
+        <div class="logo">ISO<span>Builder</span></div>
+    </div>
     <nav>
         <ul class="menu">
-            <li><a href="index.html">Início</a></li>
+            <li><a href="index.html" class="active">Início</a></li>
             <li><a href="sobre.html">Sobre</a></li>
         </ul>
     </nav>
 </header>
 
 <main class="app-container">
-    <div class="app-box">
+    <div class="blueprint-panel">
+        <span class="corner corner-tl"></span>
+        <span class="corner corner-tr"></span>
+        <span class="corner corner-bl"></span>
+        <span class="corner corner-br"></span>
 
+        <p class="panel-eyebrow">build/nova-iso</p>
         <h2>Gerador de ISO Linux</h2>
-        <p>Crie ISOs personalizadas com pacotes adicionais de forma simples.</p>
+        <p class="lede">Crie ISOs personalizadas com pacotes adicionais de forma simples.</p>
 
         <form id="isoForm" class="form">
 
             <div class="field">
-                <label>Imagem ISO</label>
-                <input id="iso" type="file" name="iso" accept=".iso" required>
+                <label for="iso">Imagem ISO <span class="hint">(.iso, obrigatório)</span></label>
+                <div class="file-input" id="isoFileInput">
+                    <span class="file-trigger">Escolher arquivo</span>
+                    <span class="file-name" data-default="Nenhum arquivo escolhido">Nenhum arquivo escolhido</span>
+                    <input id="iso" type="file" name="iso" accept=".iso" required>
+                </div>
             </div>
 
             <div class="field">
-                <label>Pacotes .deb (opcional)</label>
-                <input type="file" name="debs" accept=".deb" multiple>
+                <label for="debs">Pacotes .deb / Arch <span class="hint">(opcional)</span></label>
+                <div class="file-input" id="debsFileInput">
+                    <span class="file-trigger">Escolher arquivos</span>
+                    <span class="file-name" data-default="Nenhum arquivo escolhido">Nenhum arquivo escolhido</span>
+                    <input id="debs" type="file" name="debs" accept=".deb,.pkg.tar.zst" multiple>
+                </div>
             </div>
 
             <div class="field">
-                <label>Pasta de saída</label>
+                <label for="output_dir">Pasta de saída</label>
                 <input id="output_dir" type="text" name="output_dir" placeholder="~/Desktop/minha_iso" required>
             </div>
 
             <button type="submit">Gerar ISO personalizada</button>
 
-            <div style="margin-top:20px;">
+            <div class="build-console">
+                <div class="build-console-label">
+                    <span>status do build</span>
+                    <span id="progressPercent">0%</span>
+                </div>
                 <progress id="progressBar" value="0" max="100"></progress>
                 <p id="statusText"></p>
             </div>
@@ -55,7 +89,7 @@
 </main>
 
 <footer>
-Projeto acadêmico • Gerador de ISO Linux personalizado
+    Projeto acadêmico<span class="dot">·</span>Gerador de ISO Linux personalizado
 </footer>
 
 <script>
@@ -90,6 +124,7 @@ async function iniciarExtracao() {
 async function acompanharProgresso(taskId) {
     const bar = document.getElementById("progressBar");
     const text = document.getElementById("statusText");
+    const percent = document.getElementById("progressPercent");
 
     const interval = setInterval(async () => {
         const response = await fetch("/progress/" + taskId);
@@ -97,12 +132,48 @@ async function acompanharProgresso(taskId) {
 
         bar.value = data.progress;
         text.innerText = data.status;
+        percent.innerText = data.progress + "%";
+
+        if (data.status.startsWith("Erro")) {
+            text.classList.add("is-error");
+        }
 
         if (data.progress >= 100 || data.status.startsWith("Erro")) {
             clearInterval(interval);
         }
     }, 1000);
 }
+
+/* ------------------------------------------------------------
+   Cosmético apenas: mostra o(s) nome(s) do(s) arquivo(s)
+   escolhido(s) nos inputs de arquivo customizados.
+   Não interfere em nada do fluxo de build/progresso acima.
+   ------------------------------------------------------------ */
+function ligarPreviewDeArquivo(wrapperId) {
+    const wrapper = document.getElementById(wrapperId);
+    const input = wrapper.querySelector('input[type="file"]');
+    const nameEl = wrapper.querySelector('.file-name');
+    const defaultText = nameEl.dataset.default;
+
+    input.addEventListener("change", function () {
+        if (input.files.length === 0) {
+            nameEl.textContent = defaultText;
+            wrapper.classList.remove("has-file");
+            return;
+        }
+
+        if (input.files.length === 1) {
+            nameEl.textContent = input.files[0].name;
+        } else {
+            nameEl.textContent = input.files.length + " arquivos selecionados";
+        }
+
+        wrapper.classList.add("has-file");
+    });
+}
+
+ligarPreviewDeArquivo("isoFileInput");
+ligarPreviewDeArquivo("debsFileInput");
 </script>
 
 </body>

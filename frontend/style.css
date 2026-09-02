@@ -1,192 +1,489 @@
+/* ==========================================================
+   ISO Builder — tema "planta técnica" (blueprint), claro/azul
+   ========================================================== */
+
+:root{
+    /* Cor */
+    --paper:      #EEF3FB;   /* fundo da página, papel de planta */
+    --panel:      #FFFFFF;   /* superfície dos painéis */
+    --ink:        #101A30;   /* texto principal */
+    --ink-soft:   #55628A;   /* texto secundário */
+    --blue:       #1D4ED8;   /* azul primário — ações, destaque */
+    --blue-bright:#3B82F6;   /* azul secundário — gradientes, hover */
+    --line:       #C9D6ED;   /* linhas finas / grade */
+    --line-soft:  #DCE5F5;   /* linhas ainda mais discretas */
+    --error:      #B42318;   /* uso exclusivo para erros reais */
+
+    /* Tipografia */
+    --font-display: "Space Grotesk", "Segoe UI", sans-serif;
+    --font-mono:    "IBM Plex Mono", "Courier New", monospace;
+
+    /* Layout */
+    --radius: 3px;
+    --panel-width: 640px;
+}
+
 *{
     margin:0;
     padding:0;
     box-sizing:border-box;
-    font-family: "Segoe UI", Tahoma, sans-serif;
+}
+
+html{
+    -webkit-font-smoothing:antialiased;
 }
 
 body{
-    background: linear-gradient(135deg,#0f172a,#020617);
-    color:#e5e7eb;
+    font-family:var(--font-mono);
+    background-color:var(--paper);
+    background-image:
+        radial-gradient(var(--line-soft) 1px, transparent 1px);
+    background-size:22px 22px;
+    color:var(--ink);
     min-height:100vh;
+    display:flex;
+    flex-direction:column;
+    font-size:15px;
+    line-height:1.6;
 }
 
-/* HEADER */
+/* ==========================================================
+   CABEÇALHO
+   ========================================================== */
+
 header{
-    background:#020617;
-    padding:20px 40px;
-    border-bottom:1px solid #1e293b;
+    background:var(--panel);
+    border-bottom:1px solid var(--line);
+    padding:18px 40px;
     display:flex;
     justify-content:space-between;
     align-items:center;
 }
 
+.brand{
+    display:flex;
+    align-items:center;
+    gap:12px;
+}
+
+.brand-mark{
+    width:30px;
+    height:30px;
+    flex-shrink:0;
+}
+
 .logo{
-    font-size:24px;
-    font-weight:bold;
-    color:#38bdf8;
+    font-family:var(--font-display);
+    font-size:19px;
+    font-weight:700;
+    color:var(--ink);
+    letter-spacing:-0.01em;
+}
+
+.logo span{
+    color:var(--blue);
 }
 
 .menu{
     list-style:none;
     display:flex;
-    gap:25px;
+    gap:8px;
 }
 
 .menu a{
     text-decoration:none;
-    color:#e5e7eb;
+    color:var(--ink-soft);
+    font-family:var(--font-display);
     font-weight:500;
-    transition:0.3s;
+    font-size:14px;
+    padding:8px 14px;
+    border-radius:var(--radius);
+    transition:color 0.15s ease, background-color 0.15s ease;
 }
 
 .menu a:hover{
-    color:#38bdf8;
+    color:var(--blue);
+    background:var(--paper);
 }
 
-/* CONTAINER CENTRAL */
+.menu a.active{
+    color:var(--blue);
+    background:#E7EEFC;
+}
+
+/* ==========================================================
+   CONTAINER CENTRAL
+   ========================================================== */
+
 .app-container{
+    flex:1;
     display:flex;
     justify-content:center;
-    align-items:center;
-    padding:60px 20px;
+    align-items:flex-start;
+    padding:64px 20px;
 }
 
-/* CARD PRINCIPAL */
-.app-box{
-    width:600px;
-    background:#020617;
-    padding:35px;
-    border-radius:16px;
-    box-shadow:0 0 30px rgba(0,0,0,0.4);
-}
+/* ==========================================================
+   PAINEL "BLUEPRINT" — com marcas de canto de desenho técnico
+   ========================================================== */
 
-.app-box h2{
-    margin-bottom:10px;
-    color:#38bdf8;
-}
-
-.app-box p{
-    margin-bottom:25px;
-    opacity:0.8;
-}
-
-/* FORM */
-.field{
-    margin-bottom:20px;
-    display:flex;
-    flex-direction:column;
-}
-
-label{
-    margin-bottom:6px;
-    font-size:14px;
-}
-
-input{
-    padding:10px;
-    border-radius:8px;
-    border:1px solid #1e293b;
-    background:#0f172a;
-    color:white;
-}
-
-button{
+.blueprint-panel{
+    position:relative;
     width:100%;
-    padding:12px;
-    background:#38bdf8;
-    border:none;
-    border-radius:10px;
-    font-weight:bold;
+    max-width:var(--panel-width);
+    background:var(--panel);
+    border:1px solid var(--line);
+    padding:44px 48px;
+    opacity:0;
+    animation:panelIn 0.5s ease forwards;
+}
+
+@keyframes panelIn{
+    from{ opacity:0; transform:translateY(8px); }
+    to{ opacity:1; transform:translateY(0); }
+}
+
+.corner{
+    position:absolute;
+    width:16px;
+    height:16px;
+    pointer-events:none;
+}
+
+.corner-tl{ top:-1px; left:-1px; border-top:2px solid var(--blue); border-left:2px solid var(--blue); }
+.corner-tr{ top:-1px; right:-1px; border-top:2px solid var(--blue); border-right:2px solid var(--blue); }
+.corner-bl{ bottom:-1px; left:-1px; border-bottom:2px solid var(--blue); border-left:2px solid var(--blue); }
+.corner-br{ bottom:-1px; right:-1px; border-bottom:2px solid var(--blue); border-right:2px solid var(--blue); }
+
+.panel-eyebrow{
+    font-family:var(--font-mono);
+    font-size:12px;
+    color:var(--ink-soft);
+    margin-bottom:10px;
+}
+
+.panel-eyebrow::before{
+    content:"# ";
+    color:var(--blue);
+}
+
+.blueprint-panel h2{
+    font-family:var(--font-display);
+    font-size:26px;
+    font-weight:700;
+    color:var(--ink);
+    letter-spacing:-0.01em;
+    margin-bottom:8px;
+}
+
+.blueprint-panel > p.lede{
+    font-family:var(--font-mono);
+    color:var(--ink-soft);
+    margin-bottom:32px;
+    max-width:52ch;
+}
+
+/* ==========================================================
+   FORMULÁRIO
+   ========================================================== */
+
+.field{
+    margin-bottom:22px;
+}
+
+.field label{
+    display:block;
+    font-family:var(--font-mono);
+    font-size:13px;
+    color:var(--ink-soft);
+    margin-bottom:8px;
+}
+
+.field label .hint{
+    color:#8592B8;
+}
+
+/* input de arquivo customizado */
+.file-input{
+    position:relative;
+    display:flex;
+    align-items:center;
+    border:1px solid var(--line);
+    background:var(--paper);
+}
+
+.file-input input[type="file"]{
+    position:absolute;
+    inset:0;
+    opacity:0;
     cursor:pointer;
-    transition:0.3s;
 }
 
-button:hover{
-    background:#0ea5e9;
+.file-input .file-trigger{
+    font-family:var(--font-display);
+    font-size:13px;
+    font-weight:600;
+    color:var(--blue);
+    background:var(--panel);
+    border-right:1px solid var(--line);
+    padding:11px 16px;
+    white-space:nowrap;
 }
 
-/* PROGRESS BAR */
-progress{
-    height:18px;
-    border-radius:10px;
+.file-input .file-name{
+    padding:11px 14px;
+    font-family:var(--font-mono);
+    font-size:13px;
+    color:var(--ink-soft);
     overflow:hidden;
+    text-overflow:ellipsis;
+    white-space:nowrap;
 }
 
-footer{
-    text-align:center;
-    padding:20px;
-    opacity:0.6;
-    font-size:14px;
+.file-input:focus-within,
+.file-input.has-file{
+    border-color:var(--blue);
 }
 
+input[type="text"]{
+    width:100%;
+    padding:11px 14px;
+    border:1px solid var(--line);
+    background:var(--paper);
+    color:var(--ink);
+    font-family:var(--font-mono);
+    font-size:13px;
+}
 
-/* =========================
-   ANIMAÇÃO DA PROGRESS BAR
-   ========================= */
+input[type="text"]::placeholder{
+    color:#9AA6C7;
+}
+
+input[type="text"]:focus,
+.file-input input:focus + .file-trigger{
+    outline:none;
+    border-color:var(--blue);
+}
+
+button[type="submit"]{
+    width:100%;
+    padding:14px;
+    margin-top:8px;
+    background:var(--blue);
+    color:#fff;
+    border:none;
+    font-family:var(--font-display);
+    font-size:15px;
+    font-weight:700;
+    letter-spacing:0.01em;
+    cursor:pointer;
+    transition:background-color 0.15s ease;
+}
+
+button[type="submit"]:hover{
+    background:#1739AD;
+}
+
+button[type="submit"]:active{
+    background:#132C8A;
+}
+
+/* ==========================================================
+   CONSOLE DE BUILD (barra de progresso + status)
+   ========================================================== */
+
+.build-console{
+    margin-top:34px;
+    padding-top:24px;
+    border-top:1px dashed var(--line);
+}
+
+.build-console-label{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    font-family:var(--font-mono);
+    font-size:12px;
+    color:var(--ink-soft);
+    margin-bottom:10px;
+}
+
+#progressPercent{
+    color:var(--blue);
+    font-weight:600;
+}
 
 progress{
-    height:18px;
-    border-radius:999px;
-    overflow:hidden;
+    width:100%;
+    height:8px;
+    border:none;
     appearance:none;
+    -webkit-appearance:none;
+    background:var(--line-soft);
 }
 
-/* fundo da barra */
 progress::-webkit-progress-bar{
-    background:#0f172a;
-    border-radius:999px;
+    background:var(--line-soft);
 }
 
-/* valor preenchido */
 progress::-webkit-progress-value{
-    border-radius:999px;
-    background: linear-gradient(
-        90deg,
-        #38bdf8,
-        #0ea5e9,
-        #38bdf8
-    );
-    background-size: 200% 100%;
-    animation: moveGradient 2s linear infinite;
-    transition: width 0.4s ease;
+    background:linear-gradient(90deg, var(--blue), var(--blue-bright), var(--blue));
+    background-size:200% 100%;
+    animation:moveGradient 2s linear infinite;
+    transition:width 0.4s ease;
 }
 
-/* Firefox */
 progress::-moz-progress-bar{
-    border-radius:999px;
-    background: linear-gradient(
-        90deg,
-        #38bdf8,
-        #0ea5e9,
-        #38bdf8
-    );
-    background-size: 200% 100%;
-    animation: moveGradient 2s linear infinite;
+    background:linear-gradient(90deg, var(--blue), var(--blue-bright), var(--blue));
+    background-size:200% 100%;
+    animation:moveGradient 2s linear infinite;
 }
 
-/* =========================
-   ANIMAÇÃO DO TEXTO DE STATUS
-   ========================= */
+@keyframes moveGradient{
+    0%{ background-position:0% 0; }
+    100%{ background-position:200% 0; }
+}
 
 #statusText{
-    opacity: 0;
-    transform: translateY(6px);
-    animation: statusFade 0.6s ease forwards;
+    margin-top:12px;
+    font-family:var(--font-mono);
+    font-size:13px;
+    color:var(--ink-soft);
+    min-height:20px;
 }
 
-/* toda vez que o texto mudar o navegador reaplica a animação */
+#statusText::before{
+    content:"> ";
+    color:var(--blue);
+}
+
+#statusText:empty::before{
+    content:"";
+}
+
 #statusText:not(:empty){
-    animation: statusFade 0.6s ease forwards;
+    animation:statusFade 0.4s ease;
+}
+
+#statusText.is-error{
+    color:var(--error);
+}
+
+#statusText.is-error::before{
+    color:var(--error);
 }
 
 @keyframes statusFade{
-    from{
-        opacity:0;
-        transform: translateY(6px);
+    from{ opacity:0; transform:translateY(4px); }
+    to{ opacity:1; transform:translateY(0); }
+}
+
+/* ==========================================================
+   PÁGINA "SOBRE" — folha de especificações
+   ========================================================== */
+
+.spec-block{
+    margin-bottom:28px;
+}
+
+.spec-block:last-child{
+    margin-bottom:0;
+}
+
+.spec-block p{
+    color:var(--ink-soft);
+    max-width:62ch;
+}
+
+.spec-block p + p{
+    margin-top:12px;
+}
+
+dl.spec-sheet{
+    margin-top:8px;
+    border-top:1px solid var(--line-soft);
+}
+
+dl.spec-sheet div{
+    display:flex;
+    gap:24px;
+    padding:12px 0;
+    border-bottom:1px solid var(--line-soft);
+}
+
+dl.spec-sheet dt{
+    flex:0 0 160px;
+    font-family:var(--font-display);
+    font-weight:600;
+    font-size:13px;
+    color:var(--ink);
+}
+
+dl.spec-sheet dd{
+    color:var(--ink-soft);
+    font-size:13px;
+}
+
+/* ==========================================================
+   RODAPÉ
+   ========================================================== */
+
+footer{
+    text-align:center;
+    padding:26px 20px;
+    font-family:var(--font-mono);
+    font-size:12px;
+    color:var(--ink-soft);
+    border-top:1px solid var(--line-soft);
+}
+
+footer .dot{
+    color:var(--line);
+    margin:0 8px;
+}
+
+/* ==========================================================
+   RESPONSIVO
+   ========================================================== */
+
+@media (max-width:640px){
+    header{
+        padding:16px 20px;
     }
-    to{
-        opacity:1;
-        transform: translateY(0);
+
+    .blueprint-panel{
+        padding:32px 24px;
+    }
+
+    .app-container{
+        padding:32px 16px;
+    }
+
+    dl.spec-sheet div{
+        flex-direction:column;
+        gap:4px;
+    }
+
+    dl.spec-sheet dt{
+        flex:none;
+    }
+}
+
+/* ==========================================================
+   ACESSIBILIDADE
+   ========================================================== */
+
+a:focus-visible,
+button:focus-visible,
+input:focus-visible{
+    outline:2px solid var(--blue);
+    outline-offset:2px;
+}
+
+@media (prefers-reduced-motion: reduce){
+    *{
+        animation-duration:0.01ms !important;
+        animation-iteration-count:1 !important;
+        transition-duration:0.01ms !important;
     }
 }
