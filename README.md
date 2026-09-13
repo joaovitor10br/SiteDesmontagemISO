@@ -73,13 +73,15 @@ JavaScript (Fetch API)
 
 Sistema operacional: Linux
 
-Dependências do sistema:
+Dependências do sistema (Debian/Ubuntu/Mint):
 
 ```
 sudo apt install squashfs-tools xorriso rsync syslinux-utils isolinux p7zip-full
 ```
 
-> ⚠️ **Atenção:** o pacote `syslinux` sozinho **não** inclui o `isohdpfx.bin` (necessário para gerar ISOs híbridas BIOS/MBR). Esse arquivo vem no pacote separado `isolinux`. Se aparecer o erro `isohdpfx.bin não encontrado. Instale o pacote syslinux.` mesmo já tendo o `syslinux` instalado, rode `sudo apt install isolinux` separadamente.
+> ⚠️ **Atenção (Debian/Ubuntu):** o pacote `syslinux` sozinho **não** inclui o `isohdpfx.bin` (necessário para gerar ISOs híbridas BIOS/MBR). Esse arquivo vem no pacote separado `isolinux`. Se aparecer o erro `isohdpfx.bin não encontrado. Instale o pacote syslinux.` mesmo já tendo o `syslinux` instalado, rode `sudo apt install isolinux` separadamente.
+
+Em distros baseadas em outro gerenciador de pacotes (ex.: Fedora/`dnf`, openSUSE/`zypper`), instale os equivalentes de `squashfs-tools`, `xorriso`, `rsync`, `syslinux` e `p7zip` pelo gerenciador da sua distro. No Fedora, por exemplo, o `isohdpfx.bin` já vem incluído em um dos pacotes `syslinux`, sem precisar de um pacote separado como no Debian/Ubuntu.
 
 Dependências Python:
 
@@ -95,10 +97,9 @@ git clone https://github.com/joaovitor10br/SiteDesmontagemISO.git
 cd SiteDesmontagemISO
 ```
 
-Crie o ambiente virtual:
+Crie o ambiente virtual (na raiz do projeto):
 
 ```
-cd backend
 python -m venv venv
 source venv/bin/activate
 ```
@@ -135,10 +136,9 @@ VirtualBox / QEMU (BIOS e UEFI)
 📦 Estrutura do projeto
 
 ```
-backend/
- ├── app.py
- ├── iso_linux.py
- └── requirements.txt
+app.py
+iso_linux.py
+requirements.txt
 
 frontend/
  ├── index.html
